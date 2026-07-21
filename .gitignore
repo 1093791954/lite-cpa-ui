@@ -1,0 +1,53 @@
+# Binaries
+/lite-cpa
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Build / coverage
+/bin/
+/dist/
+/build/
+*.coverprofile
+coverage.out
+coverage.html
+profile.cov
+*.prof
+*.pprof
+cpu.out
+mem.out
+
+# Dependencies (uncomment if you vendor)
+# /vendor/
+
+# Local config (secrets)
+config.yaml
+*.local.yaml
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.fleet/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local tooling / caches
+.codegraph/
+.omp/
+tmp/
+temp/
+*.log
+logs/

@@ -1,0 +1,432 @@
+package executor
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/Mieluoxxx/lite-cpa/internal/httpx"
+	"github.com/Mieluoxxx/lite-cpa/internal/registry"
+	"github.com/Mieluoxxx/lite-cpa/internal/thinking"
+	"github.com/Mieluoxxx/lite-cpa/internal/translator"
+	"github.com/tidwall/sjson"
+)
+
+const streamScanMax = 1 << 20 // 1MiB
+
+type Result struct {
+	Status  int
+	Headers http.Header
+	Body    []byte
+}
+
+type StreamResult struct {
+	Status  int
+	Headers http.Header
+	Chunks  <-chan StreamChunk
+}
+
+type StreamChunk struct {
+	Payload []byte
+	Err     error
+}
+
+type StatusError struct {
+	Code int
+	Body string
+}
+
+func (e StatusError) Error() string {
+	if e.Body != "" {
+		return e.Body
+	}
+	return http.StatusText(e.Code)
+}
+
+func (e StatusError) StatusCode() int { return e.Code }
+
+// Execute routes to the correct standard upstream protocol.
+// Providers: openai | openai-response | claude (no Codex).
+func Execute(ctx context.Context, key registry.UpstreamKey, upstreamModel string, source translator.Format, payload []byte, stream bool) (any, error) {
+	baseModel := thinking.ParseSuffix(upstreamModel).ModelName
+	from := source
+	var to translator.Format
+	switch key.Provider {
+	case "openai":
+		to = translator.FormatOpenAI
+	case "openai-response":
+		to = translator.FormatOpenAIResponse
+	case "claude":
+		to = translator.FormatClaude
+	default:
+		return nil, fmt.Errorf("unknown provider %q", key.Provider)
+	}
+
+	translated := translator.TranslateRequest(from, to, baseModel, payload, stream)
+	translated, _ = sjson.SetBytes(translated, "model", baseModel)
+	translated, err := thinking.ApplyThinking(translated, upstreamModel, from.String(), to.String(), key.Provider)
+	if err != nil {
+		return nil, err
+	}
+
+	switch key.Provider {
+	case "openai":
+		if stream {
+			return executeOpenAIStream(ctx, key, from, to, baseModel, payload, translated)
+		}
+		return executeOpenAI(ctx, key, from, to, baseModel, payload, translated)
+	case "openai-response":
+		if stream {
+			return executeResponsesStream(ctx, key, from, to, baseModel, payload, translated)
+		}
+		return executeResponses(ctx, key, from, to, baseModel, payload, translated)
+	case "claude":
+		if stream {
+			return executeClaudeStream(ctx, key, from, to, baseModel, payload, translated)
+		}
+		return executeClaude(ctx, key, from, to, baseModel, payload, translated)
+	default:
+		return nil, fmt.Errorf("unknown provider %q", key.Provider)
+	}
+}
+
+func executeOpenAI(ctx context.Context, key registry.UpstreamKey, from, to translator.Format, model string, original, body []byte) (*Result, error) {
+	url := strings.TrimSuffix(key.BaseURL, "/") + "/chat/completions"
+	resp, err := doJSON(ctx, key, url, body, false)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
+	}
+	var param any
+	out := translator.TranslateNonStream(ctx, to, from, model, original, body, data, &param)
+	return &Result{Status: resp.StatusCode, Headers: resp.Header.Clone(), Body: out}, nil
+}
+
+func executeOpenAIStream(ctx context.Context, key registry.UpstreamKey, from, to translator.Format, model string, original, body []byte) (*StreamResult, error) {
+	body, _ = sjson.SetBytes(body, "stream_options.include_usage", true)
+	body, _ = sjson.SetBytes(body, "stream", true)
+	url := strings.TrimSuffix(key.BaseURL, "/") + "/chat/completions"
+	resp, err := doJSON(ctx, key, url, body, true)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
+	}
+	// Same-format: forward upstream SSE verbatim so [DONE] and framing stay intact.
+	if from == to {
+		return streamPassthrough(ctx, resp), nil
+	}
+	return streamSSE(ctx, resp, from, to, model, original, body), nil
+}
+
+func executeResponses(ctx context.Context, key registry.UpstreamKey, from, to translator.Format, model string, original, body []byte) (*Result, error) {
+	// Standard OpenAI Responses API: POST {base}/responses
+	body, _ = sjson.SetBytes(body, "stream", false)
+	url := strings.TrimSuffix(key.BaseURL, "/") + "/responses"
+	resp, err := doJSON(ctx, key, url, body, false)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
+	}
+	var param any
+	out := translator.TranslateNonStream(ctx, to, from, model, original, body, data, &param)
+	return &Result{Status: resp.StatusCode, Headers: resp.Header.Clone(), Body: out}, nil
+}
+
+func executeResponsesStream(ctx context.Context, key registry.UpstreamKey, from, to translator.Format, model string, original, body []byte) (*StreamResult, error) {
+	body, _ = sjson.SetBytes(body, "stream", true)
+	url := strings.TrimSuffix(key.BaseURL, "/") + "/responses"
+	resp, err := doJSON(ctx, key, url, body, true)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
+	}
+	// Same-format: preserve event:/data: association (do not reframe each line).
+	if from == to {
+		return streamPassthrough(ctx, resp), nil
+	}
+	return streamSSE(ctx, resp, from, to, model, original, body), nil
+}
+
+func executeClaude(ctx context.Context, key registry.UpstreamKey, from, to translator.Format, model string, original, body []byte) (*Result, error) {
+	// Cross-format non-stream clients still request Anthropic SSE because the
+	// ported NonStream translators aggregate data: event lines into one JSON body.
+	// Same-format clients get a normal non-stream JSON message.
+	useUpstreamStream := from != to
+	body, _ = sjson.SetBytes(body, "stream", useUpstreamStream)
+
+	base := key.BaseURL
+	if base == "" {
+		base = "https://api.anthropic.com"
+	}
+	url := strings.TrimSuffix(base, "/") + "/v1/messages"
+	resp, err := doClaude(ctx, key, url, body, useUpstreamStream)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
+	}
+	var param any
+	out := translator.TranslateNonStream(ctx, to, from, model, original, body, data, &param)
+	return &Result{Status: resp.StatusCode, Headers: resp.Header.Clone(), Body: out}, nil
+}
+
+func executeClaudeStream(ctx context.Context, key registry.UpstreamKey, from, to translator.Format, model string, original, body []byte) (*StreamResult, error) {
+	body, _ = sjson.SetBytes(body, "stream", true)
+	base := key.BaseURL
+	if base == "" {
+		base = "https://api.anthropic.com"
+	}
+	url := strings.TrimSuffix(base, "/") + "/v1/messages"
+	resp, err := doClaude(ctx, key, url, body, true)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
+	}
+	if from == to {
+		return streamPassthrough(ctx, resp), nil
+	}
+	return streamSSE(ctx, resp, from, to, model, original, body), nil
+}
+
+func doJSON(ctx context.Context, key registry.UpstreamKey, url string, body []byte, stream bool) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if key.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+key.APIKey)
+	}
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Cache-Control", "no-cache")
+	}
+	applyCustomHeaders(req, key.Headers)
+	return httpx.Do(ctx, httpx.Client(key.ProxyURL), req)
+}
+
+func doClaude(ctx context.Context, key registry.UpstreamKey, url string, body []byte, stream bool) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	if key.APIKey != "" {
+		req.Header.Set("x-api-key", key.APIKey)
+	}
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Cache-Control", "no-cache")
+		req.Header.Set("Accept-Encoding", "identity")
+	}
+	applyCustomHeaders(req, key.Headers)
+	return httpx.Do(ctx, httpx.Client(key.ProxyURL), req)
+}
+
+func applyCustomHeaders(req *http.Request, headers map[string]string) {
+	for k, v := range headers {
+		if strings.EqualFold(k, "x-lite-upstream-model") {
+			continue
+		}
+		if k != "" && v != "" {
+			req.Header.Set(k, v)
+		}
+	}
+}
+
+func streamSSE(ctx context.Context, resp *http.Response, from, to translator.Format, model string, original, translated []byte) *StreamResult {
+	out := make(chan StreamChunk, 16)
+	go func() {
+		defer close(out)
+		defer resp.Body.Close()
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), streamScanMax)
+		var param any
+		sawOpenAIDONE := false
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			trimmed := bytes.TrimSpace(line)
+			if len(trimmed) == 0 {
+				continue
+			}
+			chunks := translator.TranslateStream(ctx, to, from, model, original, translated, bytes.Clone(trimmed), &param)
+			for _, c := range chunks {
+				if len(c) == 0 {
+					continue
+				}
+				if from == translator.FormatOpenAI && isOpenAIDONE(c) {
+					sawOpenAIDONE = true
+				}
+				framed := frameForClient(c, from)
+				select {
+				case out <- StreamChunk{Payload: framed}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			select {
+			case out <- StreamChunk{Err: err}:
+			case <-ctx.Done():
+			}
+			return
+		}
+		// Flush translators that emit terminal events on [DONE].
+		chunks := translator.TranslateStream(ctx, to, from, model, original, translated, []byte("data: [DONE]"), &param)
+		for _, c := range chunks {
+			if len(c) == 0 {
+				continue
+			}
+			if from == translator.FormatOpenAI && isOpenAIDONE(c) {
+				sawOpenAIDONE = true
+			}
+			framed := frameForClient(c, from)
+			select {
+			case out <- StreamChunk{Payload: framed}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		// OpenAI chat clients expect a single terminal data: [DONE] event.
+		if from == translator.FormatOpenAI && !sawOpenAIDONE {
+			select {
+			case out <- StreamChunk{Payload: []byte("data: [DONE]\n\n")}:
+			case <-ctx.Done():
+			}
+		}
+	}()
+	return &StreamResult{Status: resp.StatusCode, Headers: resp.Header.Clone(), Chunks: out}
+}
+
+func isOpenAIDONE(chunk []byte) bool {
+	trimmed := bytes.TrimSpace(chunk)
+	if bytes.HasPrefix(trimmed, []byte("data:")) {
+		trimmed = bytes.TrimSpace(trimmed[5:])
+	}
+	return bytes.Equal(trimmed, []byte("[DONE]"))
+}
+
+// frameForClient formats a translator chunk for the client protocol.
+// OpenAI chat: each chunk is one data: event terminated by \n\n.
+// Responses/Claude: complete multi-field events (event: + data:) get a single
+// trailing \n\n; lone event: field lines get a single \n; data: closes the event.
+func frameForClient(chunk []byte, client translator.Format) []byte {
+	if len(chunk) == 0 {
+		return chunk
+	}
+	if bytes.HasSuffix(chunk, []byte("\n\n")) {
+		return chunk
+	}
+	trimmedRight := bytes.TrimRight(chunk, "\r\n")
+
+	switch client {
+	case translator.FormatOpenAI:
+		if bytes.HasPrefix(trimmedRight, []byte("data:")) {
+			out := make([]byte, 0, len(trimmedRight)+2)
+			out = append(out, trimmedRight...)
+			out = append(out, '\n', '\n')
+			return out
+		}
+		out := make([]byte, 0, len(trimmedRight)+8)
+		out = append(out, "data: "...)
+		out = append(out, trimmedRight...)
+		out = append(out, '\n', '\n')
+		return out
+	default:
+		// Multi-line payload already containing both event: and data: (common for
+		// Responses/Claude converters via SSEEventData / AppendSSEEventBytes).
+		if bytes.Contains(trimmedRight, []byte("\n")) {
+			out := make([]byte, 0, len(trimmedRight)+2)
+			out = append(out, trimmedRight...)
+			out = append(out, '\n', '\n')
+			return out
+		}
+		// Single field lines.
+		if bytes.HasPrefix(trimmedRight, []byte("event:")) ||
+			bytes.HasPrefix(trimmedRight, []byte("id:")) ||
+			bytes.HasPrefix(trimmedRight, []byte("retry:")) {
+			out := make([]byte, 0, len(trimmedRight)+1)
+			out = append(out, trimmedRight...)
+			out = append(out, '\n')
+			return out
+		}
+		if bytes.HasPrefix(trimmedRight, []byte("data:")) {
+			out := make([]byte, 0, len(trimmedRight)+2)
+			out = append(out, trimmedRight...)
+			out = append(out, '\n', '\n')
+			return out
+		}
+		// Bare JSON → data event
+		out := make([]byte, 0, len(trimmedRight)+8)
+		out = append(out, "data: "...)
+		out = append(out, trimmedRight...)
+		out = append(out, '\n', '\n')
+		return out
+	}
+}
+
+func streamPassthrough(ctx context.Context, resp *http.Response) *StreamResult {
+	out := make(chan StreamChunk, 16)
+	go func() {
+		defer close(out)
+		defer resp.Body.Close()
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), streamScanMax)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			// Forward each line; empty lines become "\n" which, after the previous
+			// line's trailing "\n", yields the SSE "\n\n" event delimiter.
+			payload := append(bytes.Clone(line), '\n')
+			select {
+			case out <- StreamChunk{Payload: payload}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			select {
+			case out <- StreamChunk{Err: err}:
+			case <-ctx.Done():
+			}
+		}
+	}()
+	return &StreamResult{Status: resp.StatusCode, Headers: resp.Header.Clone(), Chunks: out}
+}

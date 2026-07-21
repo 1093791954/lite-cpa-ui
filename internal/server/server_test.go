@@ -1,0 +1,620 @@
+package server_test
+
+import (
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Mieluoxxx/lite-cpa/internal/config"
+	"github.com/Mieluoxxx/lite-cpa/internal/server"
+	"github.com/Mieluoxxx/lite-cpa/internal/translator"
+	"github.com/tidwall/gjson"
+)
+
+func TestChatCompletionsToOpenAIUpstream(t *testing.T) {
+	translator.RegisterBuiltin()
+
+	var gotPath, gotAuth, gotBody string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host:         "127.0.0.1",
+		Port:         port,
+		APIKeys:      []string{"sk-test"},
+		RequestRetry: 1,
+		MaxBodyBytes: 1 << 20,
+		OpenAICompletions: []config.Provider{{
+			Name:    "mock",
+			BaseURL: up.URL,
+			APIKey:  "sk-up",
+			Models:  []config.ModelAlias{{Name: "mock-model", Alias: "mock-model"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() {
+		_ = srv.Shutdown(t.Context())
+	})
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/chat/completions", strings.NewReader(`{"model":"mock-model","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d body %s", resp.StatusCode, raw)
+	}
+	if gjson.GetBytes(raw, "choices.0.message.content").String() != "pong" {
+		t.Fatalf("body %s", raw)
+	}
+	if gotPath != "/chat/completions" {
+		t.Fatalf("upstream path %q", gotPath)
+	}
+	if gotAuth != "Bearer sk-up" {
+		t.Fatalf("auth %q", gotAuth)
+	}
+	if gjson.Get(gotBody, "model").String() != "mock-model" {
+		t.Fatalf("upstream body %s", gotBody)
+	}
+}
+
+func TestMultiKeyRotation(t *testing.T) {
+	translator.RegisterBuiltin()
+	var hits []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		hits = append(hits, auth)
+		if auth == "Bearer sk-bad" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"bad key"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, RequestRetry: 2, MaxBodyBytes: 1 << 20,
+		OpenAICompletions: []config.Provider{{
+			Name: "mock", BaseURL: up.URL,
+			APIKeyEntries: []config.APIKeyEntry{
+				{APIKey: "sk-bad", Priority: 0},
+				{APIKey: "sk-good", Priority: 1},
+			},
+			Models: []config.ModelAlias{{Name: "m", Alias: "m"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"x"}]}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d %s hits=%v", resp.StatusCode, raw, hits)
+	}
+	if len(hits) < 2 {
+		t.Fatalf("expected rotation, hits=%v", hits)
+	}
+}
+
+func TestModelsAndAuth(t *testing.T) {
+	translator.RegisterBuiltin()
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, MaxBodyBytes: 1 << 20,
+		OpenAICompletions: []config.Provider{{
+			Name: "x", BaseURL: "http://127.0.0.1:9", APIKey: "k",
+			Models: []config.ModelAlias{{Name: "a", Alias: "alias-a"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	resp, err := http.Get("http://127.0.0.1:" + strconv.Itoa(port) + "/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("want 401 got %d", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer sk-test")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var payload map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&payload)
+	data, _ := payload["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("models: %#v", payload)
+	}
+}
+
+func TestOpenAIToAnthropicNonStream(t *testing.T) {
+	translator.RegisterBuiltin()
+
+	var gotStream bool
+	var gotPath string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		gotStream = gjson.GetBytes(body, "stream").Bool()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(claudeSSEFixture()))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, MaxBodyBytes: 1 << 20,
+		AnthropicMessages: []config.Provider{{
+			BaseURL: up.URL,
+			APIKey:  "sk-ant",
+			Models:  []config.ModelAlias{{Name: "claude-sonnet-4", Alias: "claude-sonnet-4"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/chat/completions",
+		strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}],"stream":false}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d body %s", resp.StatusCode, raw)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("content-type %q body %s", ct, raw)
+	}
+	if gjson.GetBytes(raw, "object").String() != "chat.completion" {
+		t.Fatalf("want chat.completion, got %s", raw)
+	}
+	if gjson.GetBytes(raw, "choices.0.message.content").String() != "hello-from-claude" {
+		t.Fatalf("content: %s", raw)
+	}
+	// Must not return data: [DONE] as the whole body.
+	if strings.Contains(string(raw), "[DONE]") {
+		t.Fatalf("non-stream body leaked stream marker: %s", raw)
+	}
+	if gotPath != "/v1/messages" {
+		t.Fatalf("upstream path %q", gotPath)
+	}
+	if !gotStream {
+		t.Fatal("expected cross-format nonstream client to request Anthropic stream=true for NonStream aggregator")
+	}
+}
+
+func TestResponsesToAnthropicNonStream(t *testing.T) {
+	translator.RegisterBuiltin()
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(claudeSSEFixture()))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, MaxBodyBytes: 1 << 20,
+		AnthropicMessages: []config.Provider{{
+			BaseURL: up.URL,
+			APIKey:  "sk-ant",
+			Models:  []config.ModelAlias{{Name: "claude-sonnet-4", Alias: "claude-sonnet-4"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/responses",
+		strings.NewReader(`{"model":"claude-sonnet-4","input":"hi","stream":false}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d body %s", resp.StatusCode, raw)
+	}
+	if gjson.GetBytes(raw, "object").String() != "response" {
+		t.Fatalf("want response object, got %s", raw)
+	}
+	if strings.Contains(string(raw), "data: [DONE]") {
+		t.Fatalf("non-stream body is stream residue: %s", raw)
+	}
+}
+
+func TestOpenAIToAnthropicStreamSSEDelimiters(t *testing.T) {
+	translator.RegisterBuiltin()
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Multi-line SSE events with blank-line delimiters.
+		_, _ = w.Write([]byte(claudeSSEFixture()))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, MaxBodyBytes: 1 << 20,
+		AnthropicMessages: []config.Provider{{
+			BaseURL: up.URL,
+			APIKey:  "sk-ant",
+			Models:  []config.ModelAlias{{Name: "claude-sonnet-4", Alias: "claude-sonnet-4"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/chat/completions",
+		strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d body %s", resp.StatusCode, raw)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("content-type %q", ct)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "\n\n") {
+		t.Fatalf("SSE body missing event delimiters \\n\\n: %q", body)
+	}
+	// Framed data lines
+	if !strings.Contains(body, "data: ") {
+		t.Fatalf("expected data: frames: %q", body)
+	}
+	// At least one JSON chunk with assistant content or role
+	if !strings.Contains(body, "chat.completion.chunk") && !strings.Contains(body, `"delta"`) {
+		t.Fatalf("unexpected stream body: %s", body)
+	}
+}
+
+func TestOpenAISameFormatStreamDONE(t *testing.T) {
+	translator.RegisterBuiltin()
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}\n\n" +
+				"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: [DONE]\n\n",
+		))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, MaxBodyBytes: 1 << 20,
+		OpenAICompletions: []config.Provider{{
+			Name: "mock", BaseURL: up.URL, APIKey: "sk-up",
+			Models: []config.ModelAlias{{Name: "m", Alias: "m"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/chat/completions",
+		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"x"}],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d %s", resp.StatusCode, raw)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("missing terminal [DONE]: %q", body)
+	}
+	// Exactly one DONE marker preferred
+	if strings.Count(body, "data: [DONE]") != 1 {
+		t.Fatalf("want one [DONE], got body %q", body)
+	}
+	if !strings.Contains(body, "chat.completion.chunk") {
+		t.Fatalf("missing chunks: %q", body)
+	}
+}
+
+func TestResponsesSameFormatStreamEventAssociation(t *testing.T) {
+	translator.RegisterBuiltin()
+
+	// Upstream emits multi-field SSE events: event: then data: then blank line.
+	upstreamBody := "" +
+		"event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\"}}\n" +
+		"\n" +
+		"event: response.output_text.delta\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n" +
+		"\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}\n" +
+		"\n"
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(upstreamBody))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, MaxBodyBytes: 1 << 20,
+		OpenAIResponses: []config.Provider{{
+			BaseURL: up.URL + "/v1",
+			APIKey:  "sk-up",
+			Models:  []config.ModelAlias{{Name: "gpt-5", Alias: "gpt-5"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/responses",
+		strings.NewReader(`{"model":"gpt-5","input":"hi","stream":true}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d %s", resp.StatusCode, raw)
+	}
+	body := string(raw)
+
+	// event: and data: must remain associated within the same event (not each
+	// line closed as its own \n\n event).
+	if !strings.Contains(body, "event: response.created\ndata: {\"type\":\"response.created\"") {
+		t.Fatalf("event/data association broken for response.created:\n%s", body)
+	}
+	if !strings.Contains(body, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\"") {
+		t.Fatalf("event/data association broken for delta:\n%s", body)
+	}
+	if !strings.Contains(body, "event: response.completed\ndata: {\"type\":\"response.completed\"") {
+		t.Fatalf("event/data association broken for completed:\n%s", body)
+	}
+	// Events should be separated by blank lines
+	if !strings.Contains(body, "}\n\nevent: response.output_text.delta") &&
+		!strings.Contains(body, "}\n\nevent: response.output_text.delta") {
+		// allow \r\n variants; core association already checked
+		if strings.Count(body, "\n\n") < 2 {
+			t.Fatalf("expected multi-event SSE delimiters: %q", body)
+		}
+	}
+}
+
+func TestClaudeUpstreamToResponsesClientStream(t *testing.T) {
+	// Claude upstream SSE → Responses client: event: must stay with data:,
+	// and a terminal response.completed (or message_stop-derived) event exists.
+	translator.RegisterBuiltin()
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(claudeSSEFixture()))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, MaxBodyBytes: 1 << 20,
+		AnthropicMessages: []config.Provider{{
+			BaseURL: up.URL,
+			APIKey:  "sk-ant",
+			Models:  []config.ModelAlias{{Name: "claude-sonnet-4", Alias: "claude-sonnet-4"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/responses",
+		strings.NewReader(`{"model":"claude-sonnet-4","input":"hi","stream":true}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d body %s", resp.StatusCode, raw)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "event: response.created\ndata: ") {
+		t.Fatalf("missing associated response.created event:\n%s", body)
+	}
+	if !strings.Contains(body, "event: response.completed\ndata: ") &&
+		!strings.Contains(body, "event: response.incomplete\ndata: ") {
+		t.Fatalf("missing terminal response event:\n%s", body)
+	}
+	// event and data should not be split into separate \n\n-terminated events
+	if strings.Contains(body, "event: response.created\n\ndata: ") {
+		t.Fatalf("event/data split into separate SSE events:\n%s", body)
+	}
+}
+
+func TestResponsesUpstreamToClaudeClientStream(t *testing.T) {
+	// Responses upstream SSE → Claude client via two-hop state.
+	translator.RegisterBuiltin()
+
+	upstreamBody := "" +
+		"event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5\",\"created_at\":1,\"status\":\"in_progress\",\"output\":[]}}\n" +
+		"\n" +
+		"event: response.output_text.delta\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n" +
+		"\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n" +
+		"\n"
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(upstreamBody))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, MaxBodyBytes: 1 << 20,
+		OpenAIResponses: []config.Provider{{
+			BaseURL: up.URL,
+			APIKey:  "sk-up",
+			Models:  []config.ModelAlias{{Name: "gpt-5", Alias: "gpt-5"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/messages",
+		strings.NewReader(`{"model":"gpt-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d body %s", resp.StatusCode, raw)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "event: message_start\ndata: ") {
+		t.Fatalf("missing associated message_start:\n%s", body)
+	}
+	if !strings.Contains(body, "event: message_stop\ndata: ") &&
+		!strings.Contains(body, "event: message_delta\ndata: ") {
+		t.Fatalf("missing terminal/progress claude events:\n%s", body)
+	}
+	if strings.Contains(body, "event: message_start\n\ndata: ") {
+		t.Fatalf("event/data split into separate SSE events:\n%s", body)
+	}
+}
+
+func claudeSSEFixture() string {
+	return "" +
+		"event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-4\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n" +
+		"\n" +
+		"event: content_block_start\n" +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n" +
+		"\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello-from-claude\"}}\n" +
+		"\n" +
+		"event: content_block_stop\n" +
+		"data: {\"type\":\"content_block_stop\",\"index\":0}\n" +
+		"\n" +
+		"event: message_delta\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n" +
+		"\n" +
+		"event: message_stop\n" +
+		"data: {\"type\":\"message_stop\"}\n" +
+		"\n"
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func waitHTTP(t *testing.T, url string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("server not ready: %s", url)
+}

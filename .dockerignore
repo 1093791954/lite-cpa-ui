@@ -1,0 +1,7 @@
+lite-cpa
+*.exe
+config.yaml
+logs/
+.git/
+.DS_Store
+**/*_test.go
