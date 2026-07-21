@@ -1,8 +1,8 @@
 package pool
 
 import (
-	"strings"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,7 +18,7 @@ func BuildRegistry(cfg *config.Config) *registry.Registry {
 
 	for i, p := range cfg.AnthropicMessages {
 		name := providerName(p.Name, "anthropic", i)
-		keys := expandProvider("claude", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.APIKeyEntries, cfg.ProxyURL)
+		keys := expandProvider("claude", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.APIKeyEntries, cfg.ProxyURL, p.FailoverMode)
 		for _, m := range p.Models {
 			alias := m.ResolvedAlias()
 			if alias == "" {
@@ -32,7 +32,7 @@ func BuildRegistry(cfg *config.Config) *registry.Registry {
 
 	for i, p := range cfg.OpenAIResponses {
 		name := providerName(p.Name, "responses", i)
-		keys := expandProvider("openai-response", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.APIKeyEntries, cfg.ProxyURL)
+		keys := expandProvider("openai-response", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.APIKeyEntries, cfg.ProxyURL, p.FailoverMode)
 		for _, m := range p.Models {
 			alias := m.ResolvedAlias()
 			if alias == "" {
@@ -46,7 +46,7 @@ func BuildRegistry(cfg *config.Config) *registry.Registry {
 
 	for i, p := range cfg.OpenAICompletions {
 		name := providerName(p.Name, "compat", i)
-		keys := expandProvider("openai", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.APIKeyEntries, cfg.ProxyURL)
+		keys := expandProvider("openai", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.APIKeyEntries, cfg.ProxyURL, p.FailoverMode)
 		for _, m := range p.Models {
 			alias := m.ResolvedAlias()
 			if alias == "" {
@@ -68,18 +68,17 @@ func providerName(name, fallbackPrefix string, index int) string {
 	return fmt.Sprintf("%s-%d", fallbackPrefix, index)
 }
 
-func expandProvider(provider, name, baseURL, flatKey, flatProxy string, flatPriority int, headers map[string]string, entries []config.APIKeyEntry, globalProxy string) []registry.UpstreamKey {
+func expandProvider(provider, name, baseURL, flatKey, flatProxy string, flatPriority int, headers map[string]string, entries []config.APIKeyEntry, globalProxy, failoverMode string) []registry.UpstreamKey {
 	baseURL = trimSlash(baseURL)
-	expanded := config.ExpandKeys(flatKey, flatProxy, flatPriority, entries)
+	failoverMode = config.NormalizeFailoverMode(failoverMode)
+	expanded := config.ExpandKeys(flatKey, flatPriority, entries)
 	out := make([]registry.UpstreamKey, 0, len(expanded))
+	// proxy is provider-level (flatProxy), then global fallback
+	proxy := flatProxy
+	if proxy == "" {
+		proxy = globalProxy
+	}
 	for i, e := range expanded {
-		proxy := e.ProxyURL
-		if proxy == "" {
-			proxy = flatProxy
-		}
-		if proxy == "" {
-			proxy = globalProxy
-		}
 		priority := e.Priority
 		if priority == 0 {
 			priority = flatPriority
@@ -89,14 +88,15 @@ func expandProvider(provider, name, baseURL, flatKey, flatProxy string, flatPrio
 			h[k] = v
 		}
 		out = append(out, registry.UpstreamKey{
-			ID:       fmt.Sprintf("%s-%d", name, i),
-			Name:     name,
-			Provider: provider,
-			BaseURL:  baseURL,
-			APIKey:   e.APIKey,
-			Priority: priority,
-			Headers:  h,
-			ProxyURL: proxy,
+			ID:           fmt.Sprintf("%s-%d", name, i),
+			Name:         name,
+			Provider:     provider,
+			BaseURL:      baseURL,
+			APIKey:       e.APIKey,
+			Priority:     priority,
+			Headers:      h,
+			ProxyURL:     proxy,
+			FailoverMode: failoverMode,
 		})
 	}
 	return out
@@ -131,7 +131,7 @@ func trimSlash(s string) string {
 	return s
 }
 
-// Selector does round-robin across keys for a model with simple failure skip.
+// Selector does round-robin across keys for a model with failure skip.
 type Selector struct {
 	reg   *registry.Registry
 	rr    sync.Map // model -> *uint64
@@ -142,64 +142,68 @@ func NewSelector(reg *registry.Registry, retry int) *Selector {
 	return &Selector{reg: reg, retry: retry}
 }
 
-func (s *Selector) Pick(model string, tried map[string]struct{}) (registry.UpstreamKey, string, error) {
-	info, keys, ok := s.reg.Resolve(model)
+// Pick chooses the next unused key for model.
+// preferSupplier (if non-empty) prefers remaining keys from that provider Name first.
+// skipSuppliers excludes all keys under those provider Names (dead relay).
+func (s *Selector) Pick(model string, tried map[string]struct{}, preferSupplier string, skipSuppliers map[string]struct{}) (registry.UpstreamKey, string, error) {
+	_, keys, ok := s.reg.Resolve(model)
 	if !ok || len(keys) == 0 {
 		return registry.UpstreamKey{}, "", fmt.Errorf("model not found: %s", model)
 	}
-	_ = info
-	upstreamModel := model
-	if len(keys) > 0 && keys[0].Headers != nil {
-		if m := keys[0].Headers["x-lite-upstream-model"]; m != "" {
-			upstreamModel = m
-		}
+	start := s.nextIndex(model, len(keys))
+	ordered := make([]registry.UpstreamKey, 0, len(keys))
+	for i := 0; i < len(keys); i++ {
+		ordered = append(ordered, keys[(start+i)%len(keys)])
 	}
 
-	// Sort-stable by priority (lower number = higher priority) via two-pass.
-	// Simple: try all starting from RR index, prefer lower priority value.
-	start := s.nextIndex(model, len(keys))
-	var best *registry.UpstreamKey
-	bestPri := int(^uint(0) >> 1)
-	for i := 0; i < len(keys); i++ {
-		k := keys[(start+i)%len(keys)]
-		if tried != nil {
-			if _, used := tried[k.ID]; used {
-				continue
-			}
-		}
-		if k.Priority < bestPri {
-			cp := k
-			best = &cp
-			bestPri = k.Priority
-			// keep scanning for same-start preference of equal priority first hit
-			if i == 0 {
-				break
-			}
-		}
-	}
-	// fallback: first unused
-	if best == nil {
-		for i := 0; i < len(keys); i++ {
-			k := keys[(start+i)%len(keys)]
+	tryPick := func(restrictSupplier string) (registry.UpstreamKey, bool) {
+		var best *registry.UpstreamKey
+		bestPri := int(^uint(0) >> 1)
+		for _, k := range ordered {
 			if tried != nil {
 				if _, used := tried[k.ID]; used {
 					continue
 				}
 			}
-			cp := k
-			best = &cp
-			break
+			if restrictSupplier != "" && k.Name != restrictSupplier {
+				continue
+			}
+			if skipSuppliers != nil {
+				if _, skip := skipSuppliers[k.Name]; skip {
+					continue
+				}
+			}
+			if k.Priority < bestPri {
+				cp := k
+				best = &cp
+				bestPri = k.Priority
+			}
+		}
+		if best == nil {
+			return registry.UpstreamKey{}, false
+		}
+		return *best, true
+	}
+
+	if preferSupplier != "" {
+		if k, ok := tryPick(preferSupplier); ok {
+			return withUpstreamModel(k, model)
 		}
 	}
-	if best == nil {
-		return registry.UpstreamKey{}, "", fmt.Errorf("no available credentials for model %s", model)
+	if k, ok := tryPick(""); ok {
+		return withUpstreamModel(k, model)
 	}
-	if best.Headers != nil {
-		if m := best.Headers["x-lite-upstream-model"]; m != "" {
+	return registry.UpstreamKey{}, "", fmt.Errorf("no available credentials for model %s", model)
+}
+
+func withUpstreamModel(k registry.UpstreamKey, fallback string) (registry.UpstreamKey, string, error) {
+	upstreamModel := fallback
+	if k.Headers != nil {
+		if m := k.Headers["x-lite-upstream-model"]; m != "" {
 			upstreamModel = m
 		}
 	}
-	return *best, upstreamModel, nil
+	return k, upstreamModel, nil
 }
 
 func (s *Selector) nextIndex(model string, n int) int {

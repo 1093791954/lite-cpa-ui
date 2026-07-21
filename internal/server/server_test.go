@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -128,6 +129,160 @@ func TestMultiKeyRotation(t *testing.T) {
 	}
 	if len(hits) < 2 {
 		t.Fatalf("expected rotation, hits=%v", hits)
+	}
+}
+
+func TestChannelAffinityStickyKey(t *testing.T) {
+	translator.RegisterBuiltin()
+	var hits []string
+	var mu sync.Mutex
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		hits = append(hits, auth)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, RequestRetry: 3, MaxBodyBytes: 1 << 20,
+		ChannelAffinity: config.ChannelAffinitySetting{
+			Enabled:           boolPtr(true),
+			DefaultTTLSeconds: 60,
+			Rules: []config.ChannelAffinityRule{{
+				Name: "session sticky",
+				KeySources: []config.ChannelAffinityKeySource{
+					{Type: "gjson", Path: "metadata.user_id"},
+				},
+				IncludeRuleName: true,
+			}},
+		},
+		OpenAICompletions: []config.Provider{{
+			Name: "mock", BaseURL: up.URL,
+			APIKeyEntries: []config.APIKeyEntry{
+				{APIKey: "sk-a", Priority: 0},
+				{APIKey: "sk-b", Priority: 0},
+			},
+			Models: []config.ModelAlias{{Name: "m", Alias: "m"}},
+		}},
+	}
+	// Apply defaults used by config.Load for affinity capacity.
+	cfg.ChannelAffinity.MaxEntries = 1000
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	body := `{"model":"m","metadata":{"user_id":"sess-sticky-1"},"messages":[{"role":"user","content":"x"}]}`
+	do := func() {
+		req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer sk-test")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 {
+			t.Fatalf("status %d %s", resp.StatusCode, raw)
+		}
+	}
+	// Several requests with the same affinity value should pin one upstream key.
+	for range 6 {
+		do()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 6 {
+		t.Fatalf("hits=%v", hits)
+	}
+	first := hits[0]
+	for i, h := range hits {
+		if h != first {
+			t.Fatalf("expected sticky key %q, hit[%d]=%q all=%v", first, i, h, hits)
+		}
+	}
+}
+func TestChannelAffinitySkipRetry(t *testing.T) {
+	translator.RegisterBuiltin()
+	var hits int
+	var mu sync.Mutex
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		n := hits
+		mu.Unlock()
+		// First request succeeds (to establish sticky pin); later fail.
+		if n == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"bad"}`))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, RequestRetry: 5, MaxBodyBytes: 1 << 20,
+		ChannelAffinity: config.ChannelAffinitySetting{
+			Enabled: boolPtr(true),
+			Rules: []config.ChannelAffinityRule{{
+				Name: "sticky skip",
+				KeySources: []config.ChannelAffinityKeySource{
+					{Type: "gjson", Path: "metadata.user_id"},
+				},
+				SkipRetryOnFailure: true,
+			}},
+		},
+		OpenAICompletions: []config.Provider{{
+			Name: "mock", BaseURL: up.URL,
+			APIKeyEntries: []config.APIKeyEntry{
+				{APIKey: "sk-a"}, {APIKey: "sk-b"}, {APIKey: "sk-c"},
+			},
+			Models: []config.ModelAlias{{Name: "m", Alias: "m"}},
+		}},
+	}
+	cfg.ChannelAffinity.MaxEntries = 100
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	do := func() *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/chat/completions",
+			strings.NewReader(`{"model":"m","metadata":{"user_id":"u1"},"messages":[{"role":"user","content":"x"}]}`))
+		req.Header.Set("Authorization", "Bearer sk-test")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	resp1 := do()
+	io.Copy(io.Discard, resp1.Body)
+	resp1.Body.Close()
+	if resp1.StatusCode != 200 {
+		t.Fatalf("warm status %d", resp1.StatusCode)
+	}
+
+	before := hits
+	resp2 := do()
+	io.Copy(io.Discard, resp2.Body)
+	resp2.Body.Close()
+	if resp2.StatusCode != 401 {
+		t.Fatalf("status %d", resp2.StatusCode)
+	}
+	// One sticky attempt only — no multi-key rotation.
+	if hits-before != 1 {
+		t.Fatalf("skip-retry should attempt sticky key once, delta=%d hits=%d", hits-before, hits)
 	}
 }
 
@@ -618,3 +773,146 @@ func waitHTTP(t *testing.T, url string) {
 	}
 	t.Fatalf("server not ready: %s", url)
 }
+
+func TestProviderFailoverSkipsSupplier(t *testing.T) {
+	translator.RegisterBuiltin()
+	var hits []string
+	var mu sync.Mutex
+	// Two upstream servers: A always 500 (dead relay), B healthy.
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, "dead:"+r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"down"}`))
+	}))
+	t.Cleanup(dead.Close)
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, "live:"+r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	t.Cleanup(live.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"},
+		RequestRetry: 5, MaxBodyBytes: 1 << 20,
+		OpenAICompletions: []config.Provider{
+			{
+				Name: "relay-a", BaseURL: dead.URL, Priority: 0,
+				FailoverMode: "provider",
+				APIKeyEntries: []config.APIKeyEntry{
+					{APIKey: "sk-a1"}, {APIKey: "sk-a2"}, {APIKey: "sk-a3"},
+				},
+				Models: []config.ModelAlias{{Name: "m", Alias: "m"}},
+			},
+			{
+				Name: "relay-b", BaseURL: live.URL, Priority: 1,
+				// default key mode — only matters if it fails
+				APIKeyEntries: []config.APIKeyEntry{
+					{APIKey: "sk-b1"},
+				},
+				Models: []config.ModelAlias{{Name: "m", Alias: "m"}},
+			},
+		},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/chat/completions",
+		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"x"}]}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d %s hits=%v", resp.StatusCode, raw, hits)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// provider mode: only one hit on dead relay (first key), then jump to live.
+	deadHits := 0
+	liveHits := 0
+	for _, h := range hits {
+		if strings.HasPrefix(h, "dead:") {
+			deadHits++
+		}
+		if strings.HasPrefix(h, "live:") {
+			liveHits++
+		}
+	}
+	if deadHits != 1 {
+		t.Fatalf("expected exactly 1 dead-relay probe, hits=%v", hits)
+	}
+	if liveHits != 1 {
+		t.Fatalf("expected live success, hits=%v", hits)
+	}
+}
+
+func TestKeyFailoverStaysOnSupplier(t *testing.T) {
+	translator.RegisterBuiltin()
+	var hits []string
+	var mu sync.Mutex
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		hits = append(hits, auth)
+		mu.Unlock()
+		if auth == "Bearer sk-a1" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"bad"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	t.Cleanup(up.Close)
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"},
+		RequestRetry: 3, MaxBodyBytes: 1 << 20,
+		OpenAICompletions: []config.Provider{{
+			Name: "relay", BaseURL: up.URL,
+			FailoverMode: "key",
+			APIKeyEntries: []config.APIKeyEntry{
+				{APIKey: "sk-a1", Priority: 0},
+				{APIKey: "sk-a2", Priority: 0},
+			},
+			Models: []config.ModelAlias{{Name: "m", Alias: "m"}},
+		}},
+	}
+	srv := server.New(cfg, nil)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	waitHTTP(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/chat/completions",
+		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"x"}]}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d hits=%v", resp.StatusCode, hits)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) < 2 || hits[0] != "Bearer sk-a1" || hits[1] != "Bearer sk-a2" {
+		t.Fatalf("expected key rotation within supplier, hits=%v", hits)
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }

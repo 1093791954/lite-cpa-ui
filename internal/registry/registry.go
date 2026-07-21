@@ -27,14 +27,15 @@ type ThinkingSupport struct {
 
 // UpstreamKey is one credential that can serve a model.
 type UpstreamKey struct {
-	ID       string
-	Name     string // config provider name (profile id)
-	Provider string // openai | openai-response | claude
-	BaseURL  string
-	APIKey   string
-	Priority int
-	Headers  map[string]string
-	ProxyURL string
+	ID           string
+	Name         string // config provider name (profile id)
+	Provider     string // openai | openai-response | claude
+	BaseURL      string
+	APIKey       string
+	Priority     int
+	Headers      map[string]string
+	ProxyURL     string
+	FailoverMode string // key | provider (from provider config)
 }
 
 type modelEntry struct {
@@ -60,6 +61,16 @@ func (r *Registry) RegisterModel(alias string, info *ModelInfo, keys []UpstreamK
 	defer r.mu.Unlock()
 	cp := make([]UpstreamKey, len(keys))
 	copy(cp, keys)
+
+	if existing, ok := r.models[alias]; ok && existing != nil {
+		// Same client alias from multiple suppliers: merge credential pools.
+		merged := make([]UpstreamKey, 0, len(existing.keys)+len(cp))
+		merged = append(merged, existing.keys...)
+		merged = append(merged, cp...)
+		existing.keys = merged
+		return
+	}
+
 	infoCopy := *info
 	if infoCopy.Object == "" {
 		infoCopy.Object = "model"

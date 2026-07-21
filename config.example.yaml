@@ -1,4 +1,11 @@
-# lite-cpa example configuration
+# lite-cpa example configuration / lite-cpa 示例配置
+# Full field reference: AGENTS.md → "Configuring config.yaml"
+# 完整字段说明见 AGENTS.md「Configuring config.yaml」
+#
+# cp config.example.yaml config.yaml
+# Enable at least one provider section below.
+# 至少启用下面一类 upstream。
+
 host: ""
 port: 8317
 
@@ -8,65 +15,79 @@ api-keys:
 request-retry: 2
 debug: false
 
-# Optional request recording (disabled by default).
-# Diagnostics still go to stderr; this is structured request metadata storage.
+# Affinity on by default (TTL 600s, skip-retry false). Details in AGENTS.md.
+# 亲和默认开启（TTL 600s，失败可换 key）。详见 AGENTS.md。
+channel-affinity: [claude, gpt, gemini, grok, glm, kimi, qwen, minimax]
+# channel-affinity: false
+
 request-log:
   enabled: false
   backend: "sqlite"          # sqlite | postgres
-  retention: "168h"          # Go duration; rows older than this are deleted hourly
-  store-body: false          # if true, store req/resp body (capped 64KiB; streams omit resp body)
+  retention: "168h"
+  store-body: false
   sqlite:
     path: "logs/requests.db"
   # postgres:
   #   dsn: "postgres://litecpa:litecpa@postgres:5432/litecpa?sslmode=disable"
 
-# Upstream field order:
-#   1. name
-#   2. headers
-#   3. base-url
-#   4. api-key
-#   5. models
+# Provider field order / 字段顺序:
+#   name → proxy-url → priority → failover-mode → headers → base-url → api-key → models
+# failover-mode: key (official) | provider (relay / 中转)
+# proxy-url: provider-level only / 仅供应商级
+
+# anthropic-messages:
+#   - name: "anthropic-official"
+#     proxy-url: ""
+#     priority: 0
+#     failover-mode: "key"
+#     headers:
+#       User-Agent: "claude-cli/2.1.63 (external, cli)"
+#     base-url: "https://api.anthropic.com"
+#     api-key: "sk-ant-your-key"
+#     models:
+#       - name: "claude-sonnet-4"
+#         alias: "claude-sonnet-4"
+
+# openai-responses:
+#   - name: "openai-official"
+#     proxy-url: ""
+#     priority: 0
+#     failover-mode: "key"
+#     headers:
+#       User-Agent: "codex_cli_rs/0.144.1"
+#     base-url: "https://api.openai.com/v1"
+#     api-key: "sk-openai-official-key"
+#     models:
+#       - name: "gpt-5"
+#         alias: "gpt-5"
 #
-# Unset headers.User-Agent → Go default "Go-http-client/1.1"
+#   - name: "laysath"
+#     proxy-url: ""
+#     priority: 1
+#     failover-mode: "provider"
+#     headers:
+#       User-Agent: "codex_cli_rs/0.144.1"
+#     base-url: "https://ai.laysath.cn/v1"
+#     api-key-entries:
+#       - api-key: "sk-laysath-1"
+#         priority: 0
+#       - api-key: "sk-laysath-2"
+#         priority: 0
+#     models:
+#       - name: "gpt-5"
+#         alias: "gpt-5"
+#       - name: "grok-4.5"
+#         alias: "grok-4.5"
 
-# Anthropic Messages (standard /v1/messages)
-anthropic-messages:
-  - name: "anthropic-official"
-    headers:
-      User-Agent: "claude-cli/2.1.63 (external, cli)"
-      # Anthropic-Beta: "claude-code-20250219"
-    base-url: "https://api.anthropic.com"
-    api-key: "sk-ant-your-key"
-    models:
-      - name: "claude-sonnet-4"
-        alias: "claude-sonnet-4"
-    # api-key-entries:
-    #   - api-key: "sk-ant-1"
-    #     priority: 0
-    #   - api-key: "sk-ant-2"
-    #     proxy-url: "http://proxy:8080"
-
-# OpenAI Responses API (standard POST /v1/responses) — not Codex
-openai-responses:
-  - name: "openai-responses"
-    headers:
-      User-Agent: "codex_cli_rs/0.144.1"
-    base-url: "https://api.openai.com/v1"
-    api-key: "sk-openai-responses-key"
-    models:
-      - name: "gpt-5"
-        alias: "gpt-5"
-
-# OpenAI Chat Completions-compatible (POST /chat/completions)
-openai-completions:
-  - name: "deepseek"
-    headers:
-      User-Agent: "curl/8.7.1"
-    base-url: "https://api.deepseek.com/v1"
-    api-key: "sk-deepseek-key"
-    models:
-      - name: "deepseek-chat"
-        alias: "deepseek-chat"
-    # api-key-entries:
-    #   - api-key: "sk-1"
-    #   - api-key: "sk-2"
+# openai-completions:
+#   - name: "deepseek-official"
+#     proxy-url: ""
+#     priority: 0
+#     failover-mode: "key"
+#     headers:
+#       User-Agent: "curl/8.7.1"
+#     base-url: "https://api.deepseek.com/v1"
+#     api-key: "sk-deepseek-key"
+#     models:
+#       - name: "deepseek-chat"
+#         alias: "deepseek-chat"

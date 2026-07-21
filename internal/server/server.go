@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Mieluoxxx/lite-cpa/internal/access"
+	"github.com/Mieluoxxx/lite-cpa/internal/affinity"
 	"github.com/Mieluoxxx/lite-cpa/internal/config"
 	"github.com/Mieluoxxx/lite-cpa/internal/executor"
 	"github.com/Mieluoxxx/lite-cpa/internal/pool"
@@ -27,6 +28,7 @@ type Server struct {
 	cfg      *config.Config
 	reg      *registry.Registry
 	selector *pool.Selector
+	affinity *affinity.Manager
 	auth     *access.Checker
 	logger   *reqlog.Logger
 	http     *http.Server
@@ -41,6 +43,7 @@ func New(cfg *config.Config, logger *reqlog.Logger) *Server {
 		cfg:      cfg,
 		reg:      reg,
 		selector: pool.NewSelector(reg, cfg.RequestRetry),
+		affinity: affinity.New(cfg.ChannelAffinity),
 		auth:     access.New(cfg.APIKeys),
 		logger:   logger,
 	}
@@ -68,6 +71,9 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.affinity != nil {
+		s.affinity.Close()
+	}
 	return s.http.Shutdown(ctx)
 }
 
@@ -129,15 +135,53 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 		resolveName = baseModel
 	}
 
+	aff := s.affinity.Lookup(resolveName, r.URL.Path, r.Header, body)
+	if aff.Found {
+		if s.cfg.Debug {
+			log.Printf("affinity hit rule=%s key=%s", aff.RuleName, aff.KeyID)
+		}
+	}
+
 	tried := make(map[string]struct{})
+	skipSuppliers := make(map[string]struct{})
+	preferSupplier := ""
 	maxAttempts := s.selector.MaxAttempts(resolveName)
+	// skip-retry only applies when a sticky key is actually bound (new-api MarkChannelAffinityUsed).
+	if aff.Found && aff.SkipRetry {
+		maxAttempts = 1
+	}
 	var lastErr error
 	var lastKey registry.UpstreamKey
-	for range maxAttempts {
-		key, upstreamModel, err := s.selector.Pick(resolveName, tried)
-		if err != nil {
-			lastErr = err
-			break
+	for attempt := range maxAttempts {
+		var key registry.UpstreamKey
+		var upstreamModel string
+		var pickErr error
+
+		// First attempt: honor sticky preferred key if still available.
+		if attempt == 0 && aff.Found {
+			if _, keys, ok := s.reg.Resolve(resolveName); ok {
+				if preferred, ok := affinity.ResolvePreferred(keys, aff.KeyID, tried); ok {
+					// sticky key may still belong to a skipped supplier only on later attempts
+					key = preferred
+					upstreamModel = resolveName
+					if preferred.Headers != nil {
+						if m := preferred.Headers["x-lite-upstream-model"]; m != "" {
+							upstreamModel = m
+						}
+					}
+					preferSupplier = preferred.Name
+				}
+			}
+		}
+		if key.ID == "" {
+			key, upstreamModel, pickErr = s.selector.Pick(resolveName, tried, preferSupplier, skipSuppliers)
+			if pickErr != nil {
+				lastErr = pickErr
+				break
+			}
+			if preferSupplier == "" {
+				preferSupplier = key.Name
+			}
 		}
 		tried[key.ID] = struct{}{}
 		lastKey = key
@@ -150,10 +194,28 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 		result, err := executor.Execute(r.Context(), key, upstreamModel, source, body, stream)
 		if err != nil {
 			lastErr = err
+			// Sticky key failed: drop pin so subsequent requests rebalance.
+			if aff.Matched && aff.CacheKey != "" && key.ID == aff.KeyID {
+				s.affinity.Clear(aff.CacheKey)
+				if s.cfg.Debug {
+					log.Printf("affinity cleared rule=%s key=%s", aff.RuleName, key.ID)
+				}
+			}
 			if se, ok := err.(executor.StatusError); ok {
 				if se.Code == 401 || se.Code == 403 || se.Code == 429 || se.Code >= 500 {
 					if s.cfg.Debug {
-						log.Printf("upstream %s failed status=%d, rotating key", key.ID, se.Code)
+						log.Printf("upstream %s/%s failed status=%d, rotating (mode=%s)", key.Name, key.ID, se.Code, key.FailoverMode)
+					}
+					// skip-retry-on-failure: do not rotate after a sticky preferred key failed
+					if aff.Found && aff.SkipRetry && key.ID == aff.KeyID {
+						break
+					}
+					// per-provider mode: one bad key ⇒ skip remaining keys of this supplier
+					if key.FailoverMode == "provider" {
+						skipSuppliers[key.Name] = struct{}{}
+						if preferSupplier == key.Name {
+							preferSupplier = ""
+						}
 					}
 					continue
 				}
@@ -163,7 +225,28 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 				s.logReq(reqID, r, protocol, model, key.Provider, key.Name, se.Code, start, se.Error(), body, []byte(se.Body))
 				return
 			}
+			if aff.Found && aff.SkipRetry && key.ID == aff.KeyID {
+				break
+			}
+			if key.FailoverMode == "provider" {
+				skipSuppliers[key.Name] = struct{}{}
+				if preferSupplier == key.Name {
+					preferSupplier = ""
+				}
+			}
 			continue
+		}
+
+		// Success: pin (or refresh) sticky binding.
+		if aff.Matched {
+			// switch-on-success (default true): always pin the key that succeeded.
+			// when false: only pin if we have no prior pin or the preferred key succeeded.
+			if s.cfg.ChannelAffinity.SwitchOnSuccessOrDefault() || !aff.Found || aff.KeyID == key.ID {
+				s.affinity.Record(aff.CacheKey, key.ID, aff.TTL)
+				if s.cfg.Debug {
+					log.Printf("affinity recorded rule=%s key=%s", aff.RuleName, key.ID)
+				}
+			}
 		}
 
 		switch v := result.(type) {

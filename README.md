@@ -14,16 +14,29 @@ Based on [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) by Lu
 
 - Cross-format conversion: `chat` ↔ `responses` ↔ `claude`
 - Named upstream providers with multi-key round-robin and retry
+- Optional **channel affinity** (new-api style sticky keys by header/body rule)
 - Per-provider headers (including `User-Agent`)
 - Optional request log: SQLite or Postgres with retention cleanup
 - Binary / Docker / Compose deployment
 
 ## Docs
 
+- [AGENTS.md](AGENTS.md) — config reference + **deployment** (binary / Docker / Compose)
 - [Protocol conversion design](docs/Protocol-Conversion.md)
 - Chinese design notes: [格式转换是如何实现的](docs/格式转换是如何实现的.md)
+- [Channel affinity, retry, failover](docs/Channel-Affinity-and-Retry.md)
+- Chinese: [渠道亲和与重试](docs/渠道亲和与重试.md)
 - Wiki: https://github.com/Mieluoxxx/lite-cpa/wiki  
   (GitHub requires creating the first Wiki page in the web UI before git push works.)
+
+### Deploy with an AI assistant
+
+Copy-paste to your coding agent (Claude / Cursor / Codex / etc.):
+
+```text
+Read https://github.com/Mieluoxxx/lite-cpa/blob/main/AGENTS.md and deploy lite-cpa on this machine using that document. Follow its "Configuring config.yaml" and "Deployment" sections: create config.yaml from config.example.yaml, fill gateway api-keys and at least one upstream provider, then start with docker compose (preferred) or a local binary. Prefer failover-mode key for official APIs and provider for relays. Verify with /healthz and one sample chat/completions request. Do not commit secrets.
+```
+
 
 ## Quick start
 
@@ -56,13 +69,18 @@ curl http://127.0.0.1:8317/v1/chat/completions \
 
 ## Configuration
 
+Full reference: [AGENTS.md](AGENTS.md#configuring-configyaml).
+
 Provider field order:
 
 1. `name`
-2. `headers`
-3. `base-url`
-4. `api-key`
-5. `models`
+2. `proxy-url`
+3. `priority`
+4. `failover-mode`
+5. `headers`
+6. `base-url`
+7. `api-key`
+8. `models`
 
 ```yaml
 host: ""
@@ -85,6 +103,9 @@ request-log:
 
 anthropic-messages:
   - name: anthropic-official
+    proxy-url: ""
+    priority: 0
+    failover-mode: key
     headers:
       User-Agent: "claude-cli/2.1.63 (external, cli)"
     base-url: "https://api.anthropic.com"
@@ -98,6 +119,9 @@ anthropic-messages:
 
 openai-responses:
   - name: openai-responses
+    proxy-url: ""
+    priority: 0
+    failover-mode: key
     headers:
       User-Agent: "openai-python/1.40.0"
     base-url: "https://api.openai.com/v1"
@@ -108,6 +132,9 @@ openai-responses:
 
 openai-completions:
   - name: deepseek
+    proxy-url: ""
+    priority: 0
+    failover-mode: key
     headers:
       User-Agent: "curl/8.7.1"
     base-url: "https://api.deepseek.com/v1"
@@ -120,6 +147,56 @@ openai-completions:
 ### User-Agent
 
 If `headers.User-Agent` is unset, Go sends the default `Go-http-client/1.1`.
+
+### Failover mode
+
+Per **provider** (`name`), not global. After a retriable error (401/403/429/5xx):
+
+```yaml
+openai-completions:
+  - name: relay-a
+    base-url: https://a.example/v1
+    failover-mode: provider   # official → key; relay (e.g. ai.laysath.cn) → provider
+    api-key-entries:
+      - api-key: sk-a1
+      - api-key: sk-a2
+    models:
+      - { name: grok-4.5, alias: grok-4.5 }
+
+  - name: relay-b
+    base-url: https://b.example/v1
+    # failover-mode omitted => key
+    api-key: sk-b1
+    models:
+      - { name: grok-4.5, alias: grok-4.5 }
+```
+
+| mode | behavior |
+|---|---|
+| `key` | try next unused key of any supplier |
+| `provider` | skip **all keys under this `name`**, jump to another supplier |
+
+Same client model alias across providers is merged into one pool.
+
+
+### Channel affinity
+
+Pin the same upstream API key for a session (prompt cache). Memory only. **On by default**.
+
+Default TTL is **600s**; sticky failure allows key rotation (`skip-retry` false).
+
+```yaml
+# all defaults (claude/gpt/gemini/grok/glm/kimi/qwen/minimax)
+# channel-affinity: true
+
+# only some families
+channel-affinity: [claude, gpt, grok]
+
+# off
+# channel-affinity: false
+```
+
+Sticky identity (first present wins): session headers (`Session-Id` / `session_id` / `X-Session-Id` / `Thread-Id`) → protocol body (`/v1/messages` uses `metadata.user_id`, `/v1/responses` & chat use `prompt_cache_key`). Model family match is substring (e.g. `proxy-claude-x` matches `claude`). No identity field → normal round-robin.
 
 ### Request log
 

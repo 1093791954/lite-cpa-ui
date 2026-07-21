@@ -14,16 +14,29 @@
 
 - 三协议互转：`chat` ↔ `responses` ↔ `claude`
 - 命名上游 + 多 Key 轮询 / 失败重试
+- 可选 **渠道亲和性**（new-api 式规则粘滞：按 header/body 钉住上游 key）
 - 按上游配置 header（含 `User-Agent`）
 - 可选请求记录：SQLite 或 Postgres，带过期清理
 - 支持二进制 / Docker / Compose 部署
 
 ## 文档
 
+- [AGENTS.md](AGENTS.md) — **config 说明 + 部署**（二进制 / Docker / Compose）
 - 中文设计说明：[格式转换是如何实现的](docs/格式转换是如何实现的.md)
 - English: [Protocol Conversion](docs/Protocol-Conversion.md)
+- [渠道亲和、重试与故障切换](docs/渠道亲和与重试.md)
+- English: [Channel Affinity and Retry](docs/Channel-Affinity-and-Retry.md)
 - Wiki：https://github.com/Mieluoxxx/lite-cpa/wiki  
   （GitHub 要求先在网页创建第一个 Wiki 页面后，才能用 git 推送 wiki）
+
+### 用 AI 助手部署
+
+复制下面这段给编程助手（Claude / Cursor / Codex 等）：
+
+```text
+请阅读 https://github.com/Mieluoxxx/lite-cpa/blob/main/AGENTS.md ，并按该文档在本机部署 lite-cpa。严格遵循其中的「Configuring config.yaml」与「Deployment」：从 config.example.yaml 生成 config.yaml，填写网关 api-keys 与至少一个上游 provider，优先用 docker compose 启动（或本地二进制）。官方 API 用 failover-mode: key，中转站用 provider。
+```
+
 
 ## 快速开始
 
@@ -56,13 +69,18 @@ curl http://127.0.0.1:8317/v1/chat/completions \
 
 ## 配置
 
-上游字段顺序：
+完整字段说明见 [AGENTS.md](AGENTS.md#configuring-configyaml)。
+
+Provider 字段顺序：
 
 1. `name`
-2. `headers`
-3. `base-url`
-4. `api-key`
-5. `models`
+2. `proxy-url`
+3. `priority`
+4. `failover-mode`
+5. `headers`
+6. `base-url`
+7. `api-key`
+8. `models`
 
 ```yaml
 host: ""
@@ -85,6 +103,9 @@ request-log:
 
 anthropic-messages:
   - name: anthropic-official
+    proxy-url: ""
+    priority: 0
+    failover-mode: key
     headers:
       User-Agent: "claude-cli/2.1.63 (external, cli)"
     base-url: "https://api.anthropic.com"
@@ -98,6 +119,9 @@ anthropic-messages:
 
 openai-responses:
   - name: openai-responses
+    proxy-url: ""
+    priority: 0
+    failover-mode: key
     headers:
       User-Agent: "openai-python/1.40.0"
     base-url: "https://api.openai.com/v1"
@@ -108,6 +132,9 @@ openai-responses:
 
 openai-completions:
   - name: deepseek
+    proxy-url: ""
+    priority: 0
+    failover-mode: key
     headers:
       User-Agent: "curl/8.7.1"
     base-url: "https://api.deepseek.com/v1"
@@ -120,6 +147,56 @@ openai-completions:
 ### User-Agent
 
 未配置 `headers.User-Agent` 时，Go 默认发送 `Go-http-client/1.1`。
+
+### 故障切换模式
+
+挂在 **provider（`name`）** 上，不是全局。可重试错误（401/403/429/5xx）后：
+
+```yaml
+openai-completions:
+  - name: relay-a
+    base-url: https://a.example/v1
+    failover-mode: provider   # 官方 → key；中转（如 ai.laysath.cn）→ provider
+    api-key-entries:
+      - api-key: sk-a1
+      - api-key: sk-a2
+    models:
+      - { name: grok-4.5, alias: grok-4.5 }
+
+  - name: relay-b
+    base-url: https://b.example/v1
+    # 省略 failover-mode => key
+    api-key: sk-b1
+    models:
+      - { name: grok-4.5, alias: grok-4.5 }
+```
+
+| 模式 | 行为 |
+|---|---|
+| `key` | 换下一把未用 key（任意供应商） |
+| `provider` | 跳过 **该 `name` 下全部 key**，切到另一家 |
+
+多个 provider 使用相同客户端模型 alias 时会合并成一个 key 池。
+
+
+### 渠道亲和
+
+同一会话钉住同一上游 API key（保 prompt cache）。进程内存，**默认开启**。
+
+默认 TTL **600s**；亲和失败允许换 key（`skip-retry` 默认 false）。
+
+```yaml
+# 默认全部：claude/gpt/gemini/grok/glm/kimi/qwen/minimax
+# channel-affinity: true
+
+# 只开部分模型族
+channel-affinity: [claude, gpt, grok]
+
+# 关闭
+# channel-affinity: false
+```
+
+亲和值优先级：session 请求头（`Session-Id` / `session_id` / `X-Session-Id` / `Thread-Id`）→ 协议 body（`/v1/messages` 用 `metadata.user_id`，`/v1/responses` 与 chat 用 `prompt_cache_key`）。模型族用子串匹配（如 `proxy-claude-x` 命中 `claude`）。没有身份字段 → 普通轮询。
 
 ### 请求记录
 
