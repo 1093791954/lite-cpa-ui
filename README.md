@@ -15,6 +15,13 @@ Author / 作者: **Mieluoxxx**
 
 ---
 
+
+## Docs / 文档
+
+- 中文：[格式转换是如何实现的](docs/格式转换是如何实现的.md)
+- English: [Protocol Conversion](docs/Protocol-Conversion.md)
+- Wiki（需在 GitHub 网页创建首个页面后可用）：https://github.com/Mieluoxxx/lite-cpa/wiki
+
 ## Features / 功能
 
 | | EN | 中文 |
