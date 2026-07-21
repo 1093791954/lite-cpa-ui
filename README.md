@@ -1,44 +1,35 @@
 # lite-cpa
 
-**中文 | English**
+[中文文档](README_zh.md)
 
-Slim Go gateway for protocol conversion among OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.  
-轻量 Go 网关，在 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 之间做协议转换。
+Slim Go gateway for protocol conversion among **OpenAI Chat Completions**, **OpenAI Responses**, and **Anthropic Messages**.
 
-Single binary · config multi-key pools · optional request recording (SQLite / Postgres) · no control plane.  
-单二进制 · 配置多 Key · 可选请求记录（SQLite / Postgres）· 无控制面。
+Single binary · config multi-key pools · optional request recording (SQLite / Postgres) · no control plane.
 
-Based on [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) by Luis Pater / Router-For.ME.  
-基于 [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI)（Luis Pater / Router-For.ME）。
+Based on [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) by Luis Pater / Router-For.ME.
 
-Author / 作者: **Mieluoxxx**
+**Author:** Mieluoxxx
 
----
+## Features
 
+- Cross-format conversion: `chat` ↔ `responses` ↔ `claude`
+- Named upstream providers with multi-key round-robin and retry
+- Per-provider headers (including `User-Agent`)
+- Optional request log: SQLite or Postgres with retention cleanup
+- Binary / Docker / Compose deployment
 
-## Docs / 文档
+## Docs
 
-- 中文：[格式转换是如何实现的](docs/格式转换是如何实现的.md)
-- English: [Protocol Conversion](docs/Protocol-Conversion.md)
-- Wiki（需在 GitHub 网页创建首个页面后可用）：https://github.com/Mieluoxxx/lite-cpa/wiki
+- [Protocol conversion design](docs/Protocol-Conversion.md)
+- Chinese design notes: [格式转换是如何实现的](docs/格式转换是如何实现的.md)
+- Wiki: https://github.com/Mieluoxxx/lite-cpa/wiki  
+  (GitHub requires creating the first Wiki page in the web UI before git push works.)
 
-## Features / 功能
-
-| | EN | 中文 |
-|---|---|---|
-| Protocols | `chat` ↔ `responses` ↔ `claude` | 三协议互转 |
-| Config | Named providers + multi-key RR/retry | 命名上游 + 多 Key 轮询/重试 |
-| Headers | Per-provider headers (e.g. User-Agent) | 按上游配置 header（含 UA） |
-| Request log | Optional SQLite or Postgres + retention | 可选 SQLite/Postgres + 过期清理 |
-| Deploy | Binary / Docker / Compose | 二进制 / Docker / Compose |
-
----
-
-## Quick start / 快速开始
+## Quick start
 
 ```bash
 cp config.example.yaml config.yaml
-# edit api-keys + upstream credentials / 填写网关 key 与上游凭证
+# edit api-keys and upstream credentials
 
 go run ./cmd/lite-cpa --config config.yaml
 
@@ -53,7 +44,7 @@ curl http://127.0.0.1:8317/v1/chat/completions \
   -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-### Endpoints / 接口
+### Endpoints
 
 | Method | Path | Client format |
 |---|---|---|
@@ -63,11 +54,9 @@ curl http://127.0.0.1:8317/v1/chat/completions \
 | POST | `/v1/responses` | openai-responses |
 | POST | `/v1/messages` | anthropic-messages |
 
----
+## Configuration
 
-## Configuration / 配置
-
-Provider field order / 上游字段顺序:
+Provider field order:
 
 1. `name`
 2. `headers`
@@ -83,11 +72,11 @@ api-keys:
 request-retry: 2
 debug: false
 
-# Optional request recording / 可选请求记录
+# Optional request recording
 request-log:
   enabled: false
   backend: "sqlite"       # sqlite | postgres
-  retention: "168h"       # delete rows older than this (hourly cleanup)
+  retention: "168h"       # Go duration; hourly cleanup
   store-body: false       # metadata only by default; streams never store resp body
   sqlite:
     path: "logs/requests.db"
@@ -130,24 +119,20 @@ openai-completions:
 
 ### User-Agent
 
-Unset `headers.User-Agent` → Go default `Go-http-client/1.1`.  
-未配置时使用 Go 默认 UA。
+If `headers.User-Agent` is unset, Go sends the default `Go-http-client/1.1`.
 
-### Request log / 请求记录
+### Request log
 
 | Field | Meaning |
 |---|---|
 | `enabled` | default `false` |
 | `backend` | `sqlite` or `postgres` |
-| `retention` | Go duration, e.g. `168h` (7d). Hourly cleanup. |
-| `store-body` | default `false`; if true, bodies capped at 64KiB; **SSE responses are not stored** |
+| `retention` | Go duration, e.g. `168h` (7 days). Cleaned hourly. |
+| `store-body` | default `false`; if true, bodies capped at 64KiB; **SSE response bodies are not stored** |
 | `sqlite.path` | default `logs/requests.db` |
-| `postgres.dsn` | required for postgres backend |
+| `postgres.dsn` | required when backend is postgres |
 
-Process diagnostics still go to **stderr** only (not the DB).  
-进程诊断日志仍只写 **stderr**。
-
----
+Process diagnostics still go to **stderr** only (not the DB).
 
 ## Docker
 
@@ -165,7 +150,7 @@ Mounts:
 - `./config.yaml` → `/app/config.yaml` (read-only)
 - `./logs` → `/app/logs` (sqlite path when enabled)
 
-Image listens on `8317`. Timezone default `Asia/Shanghai` (`TZ`).
+Listens on port `8317`. Default timezone `Asia/Shanghai` (`TZ`).
 
 ### Postgres backend (optional)
 
@@ -194,9 +179,7 @@ docker run --rm -p 8317:8317 \
   lite-cpa:local
 ```
 
----
-
-## Development / 开发
+## Development
 
 ```bash
 gofmt -w .
@@ -204,39 +187,44 @@ go test ./...
 go build -trimpath -ldflags='-s -w' -o lite-cpa ./cmd/lite-cpa
 ```
 
-Layout (translators):
+Translator layout:
 
 ```text
-internal/translator/{from}/{to}/   # chat|claude|responses
+internal/translator/{from}/{to}/   # chat | claude | responses
 ```
 
----
+## Performance notes
 
-## Performance notes / 性能说明
-
-- Shared `http.Transport` (HTTP/2, idle conn reuse)
+- Shared `http.Transport` (HTTP/2, idle connection reuse)
 - Stream scanner cap 1MiB
 - Single request translation per attempt
-- Request log async + bounded queue; disabled by default
+- Request log is async with a bounded queue; disabled by default
 - Streaming responses: metadata only (no response body accumulation)
 
----
+## Contributing
 
-## Contributions / 贡献记录
+Contributions are welcome.
 
-| Date | Author | Change |
-|---|---|---|
-| 2026-07 | Mieluoxxx | Initial independent slim gateway (protocol conversion, multi-key, Docker) |
-| 2026-07 | Mieluoxxx | Named providers + headers/User-Agent profiles |
-| 2026-07 | Mieluoxxx | Optional request-log with SQLite/Postgres + retention |
-| 2026-07 | Mieluoxxx | Translator layout `{from}/{to}`; bilingual README |
+1. Fork the repository and create a feature branch.
+2. Keep changes small and focused.
+3. Run checks before opening a PR:
 
-Contributions welcome via PR. Keep changes small; run `go test ./...` before submit.  
-欢迎 PR：保持改动小，提交前运行 `go test ./...`。
+```bash
+gofmt -w .
+go test ./...
+go build -o /tmp/lite-cpa ./cmd/lite-cpa
+```
 
----
+4. Prefer English for code comments and PR descriptions.
+5. Do not commit secrets (`config.yaml`, API keys, local log DBs).
+6. For protocol conversion changes, add or update tests covering:
+   - same-format passthrough
+   - cross-format non-stream
+   - cross-format stream (SSE framing)
 
-## License / 许可证
+Open a pull request against `main` with a short summary of the problem and the fix.
+
+## License
 
 MIT. Copyright notices:
 
