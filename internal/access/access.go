@@ -22,9 +22,9 @@ func New(keys []string) *Checker {
 
 func (c *Checker) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Public: health, root, and the embedded monitor UI shells.
-		// /api/logs* still require a gateway key (browser prompts once).
-		if r.URL.Path == "/healthz" || r.URL.Path == "/" || r.URL.Path == "/dashboard" || r.URL.Path == "/dashboard.html" {
+		// Public: health, root, and embedded monitor assets. /api/logs* still
+		// require a gateway key (the browser prompts once and stores it locally).
+		if r.URL.Path == "/healthz" || r.URL.Path == "/" || r.URL.Path == "/dashboard" || r.URL.Path == "/dashboard.html" || r.URL.Path == "/assets/pico-2.1.1.classless.min.css" {
 			next.ServeHTTP(w, r)
 			return
 		}

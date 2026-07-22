@@ -23,6 +23,8 @@ type Stats struct {
 	AvgDurationMS float64     `json:"avg_duration_ms"`
 	InputTokens   int64       `json:"input_tokens"`
 	OutputTokens  int64       `json:"output_tokens"`
+	CachedTokens  int64       `json:"cached_tokens"`
+	CacheHitRate  float64     `json:"cache_hit_rate"`
 	OutputTPS     float64     `json:"output_tps"`
 	ByStatus      []NameCount `json:"by_status"`
 	ByModel       []NameCount `json:"by_model"`
@@ -117,5 +119,10 @@ func finalizeStats(st *Stats) {
 	st.Success = st.Total - st.Errors
 	if st.Success < 0 {
 		st.Success = 0
+	}
+	if st.InputTokens > 0 {
+		st.CacheHitRate = float64(st.CachedTokens) / float64(st.InputTokens)
+	} else {
+		st.CacheHitRate = 0
 	}
 }

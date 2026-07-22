@@ -52,6 +52,7 @@ func New(cfg *config.Config, logger *reqlog.Logger) *Server {
 	mux.HandleFunc("GET /", s.handleRoot)
 	mux.HandleFunc("GET /dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /dashboard.html", s.handleDashboard)
+	mux.HandleFunc("GET /assets/pico-2.1.1.classless.min.css", s.handlePicoClasslessCSS)
 	mux.HandleFunc("GET /api/logs", s.handleLogsList)
 	mux.HandleFunc("GET /api/logs/stats", s.handleLogsStats)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
@@ -359,6 +360,7 @@ func (s *Server) logReq(id string, r *http.Request, protocol, model, provider, u
 	if len(usage) > 0 {
 		rec.InputTokens = usage[0].inputTokens
 		rec.OutputTokens = usage[0].outputTokens
+		rec.CachedTokens = usage[0].cachedTokens
 	}
 	if s.cfg.RequestLog.StoreBody {
 		// Cap stored bodies to keep memory/disk bounded.

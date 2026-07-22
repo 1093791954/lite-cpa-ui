@@ -11,8 +11,10 @@ import (
 type tokenUsage struct {
 	inputTokens  int64
 	outputTokens int64
+	cachedTokens int64
 	inputSeen    bool
 	outputSeen   bool
+	cachedSeen   bool
 }
 
 func usageFromResponse(payload []byte) tokenUsage {
@@ -61,6 +63,17 @@ func (u *tokenUsage) mergeUsage(usage gjson.Result) {
 	} else if input := usage.Get("input_tokens"); input.Exists() {
 		u.inputTokens = input.Int() + usage.Get("cache_creation_input_tokens").Int() + usage.Get("cache_read_input_tokens").Int()
 		u.inputSeen = true
+	}
+
+	if cached := usage.Get("prompt_tokens_details.cached_tokens"); cached.Exists() {
+		u.cachedTokens = cached.Int()
+		u.cachedSeen = true
+	} else if cached := usage.Get("input_tokens_details.cached_tokens"); cached.Exists() {
+		u.cachedTokens = cached.Int()
+		u.cachedSeen = true
+	} else if cacheRead := usage.Get("cache_read_input_tokens"); cacheRead.Exists() {
+		u.cachedTokens = cacheRead.Int()
+		u.cachedSeen = true
 	}
 
 	if completion := usage.Get("completion_tokens"); completion.Exists() {

@@ -22,6 +22,7 @@ type Record struct {
 	DurationMS   int64     `json:"duration_ms"`
 	InputTokens  int64     `json:"input_tokens"`
 	OutputTokens int64     `json:"output_tokens"`
+	CachedTokens int64     `json:"cached_tokens"`
 	Error        string    `json:"error"`
 	ReqBody      string    `json:"req_body,omitempty"`
 	RespBody     string    `json:"resp_body,omitempty"`

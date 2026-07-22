@@ -149,8 +149,8 @@ func TestSQLiteListAndStats(t *testing.T) {
 
 	now := time.Now().UTC()
 	rows := []Record{
-		{RequestID: "a", Timestamp: now.Add(-2 * time.Second), Method: "POST", Path: "/v1/messages", StatusCode: 200, Model: "claude-x", Protocol: "claude", Upstream: "anth", DurationMS: 10, InputTokens: 100, OutputTokens: 10},
-		{RequestID: "b", Timestamp: now.Add(-1 * time.Second), Method: "POST", Path: "/v1/responses", StatusCode: 429, Model: "gpt-x", Protocol: "responses", Upstream: "laysath", DurationMS: 20, InputTokens: 200, OutputTokens: 20, Error: "rate"},
+		{RequestID: "a", Timestamp: now.Add(-2 * time.Second), Method: "POST", Path: "/v1/messages", StatusCode: 200, Model: "claude-x", Protocol: "claude", Upstream: "anth", DurationMS: 10, InputTokens: 100, OutputTokens: 10, CachedTokens: 40},
+		{RequestID: "b", Timestamp: now.Add(-1 * time.Second), Method: "POST", Path: "/v1/responses", StatusCode: 429, Model: "gpt-x", Protocol: "responses", Upstream: "laysath", DurationMS: 20, InputTokens: 200, OutputTokens: 20, CachedTokens: 50, Error: "rate"},
 		{RequestID: "c", Timestamp: now, Method: "POST", Path: "/v1/chat/completions", StatusCode: 500, Model: "gpt-x", Protocol: "chat", Upstream: "laysath", DurationMS: 30, Error: "boom"},
 	}
 	for _, r := range rows {
@@ -172,8 +172,8 @@ func TestSQLiteListAndStats(t *testing.T) {
 	if items[0].RequestID != "c" || items[1].RequestID != "b" {
 		t.Fatalf("order got %q %q", items[0].RequestID, items[1].RequestID)
 	}
-	if items[1].InputTokens != 200 || items[1].OutputTokens != 20 {
-		t.Fatalf("listed tokens = (%d, %d), want (200, 20)", items[1].InputTokens, items[1].OutputTokens)
+	if items[1].InputTokens != 200 || items[1].OutputTokens != 20 || items[1].CachedTokens != 50 {
+		t.Fatalf("listed tokens = (%d, %d, %d), want (200, 20, 50)", items[1].InputTokens, items[1].OutputTokens, items[1].CachedTokens)
 	}
 
 	errItems, errTotal, err := store.List(context.Background(), ListFilter{ErrorsOnly: true, Limit: 10})
@@ -202,8 +202,11 @@ func TestSQLiteListAndStats(t *testing.T) {
 	if st.AvgDurationMS < 19 || st.AvgDurationMS > 21 {
 		t.Fatalf("avg duration %v", st.AvgDurationMS)
 	}
-	if st.InputTokens != 300 || st.OutputTokens != 30 || st.OutputTPS != 500 {
-		t.Fatalf("token stats input=%d output=%d tps=%v", st.InputTokens, st.OutputTokens, st.OutputTPS)
+	if st.InputTokens != 300 || st.OutputTokens != 30 || st.CachedTokens != 90 || st.OutputTPS != 500 {
+		t.Fatalf("token stats input=%d output=%d cached=%d tps=%v", st.InputTokens, st.OutputTokens, st.CachedTokens, st.OutputTPS)
+	}
+	if st.CacheHitRate != 0.3 {
+		t.Fatalf("cache hit rate %v want 0.3", st.CacheHitRate)
 	}
 	if len(st.ByUpstream) == 0 || st.ByUpstream[0].Name != "laysath" || st.ByUpstream[0].Count != 2 {
 		t.Fatalf("by_upstream %#v", st.ByUpstream)

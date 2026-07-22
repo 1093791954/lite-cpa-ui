@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>lite-cpa · Logs</title>
+  <link rel="stylesheet" href="/assets/pico-2.1.1.classless.min.css" />
   <style>
     :root, [data-theme="light"] {
       --bg0: #f5f5f7;
@@ -43,6 +44,22 @@
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
       --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
               "Helvetica Neue", system-ui, sans-serif;
+      --pico-font-family: var(--sans);
+      --pico-background-color: var(--bg0);
+      --pico-color: var(--text);
+      --pico-muted-color: var(--muted);
+      --pico-muted-border-color: var(--stroke-strong);
+      --pico-primary: var(--accent);
+      --pico-primary-background: var(--accent);
+      --pico-primary-border: var(--accent);
+      --pico-primary-hover: var(--accent-hover);
+      --pico-primary-hover-background: var(--accent-hover);
+      --pico-primary-hover-border: var(--accent-hover);
+      --pico-form-element-background-color: var(--input-bg);
+      --pico-form-element-border-color: var(--stroke-strong);
+      --pico-form-element-color: var(--text);
+      --pico-form-element-focus-color: var(--accent-soft);
+      --pico-border-radius: 12px;
     }
 
     [data-theme="dark"] {
@@ -80,6 +97,20 @@
       --banner-bg: rgba(255, 214, 10, 0.1);
       --banner-border: rgba(255, 214, 10, 0.26);
       --banner-text: #ffd60a;
+      --pico-background-color: var(--bg0);
+      --pico-color: var(--text);
+      --pico-muted-color: var(--muted);
+      --pico-muted-border-color: var(--stroke-strong);
+      --pico-primary: var(--accent);
+      --pico-primary-background: var(--accent);
+      --pico-primary-border: var(--accent);
+      --pico-primary-hover: var(--accent-hover);
+      --pico-primary-hover-background: var(--accent-hover);
+      --pico-primary-hover-border: var(--accent-hover);
+      --pico-form-element-background-color: var(--input-bg);
+      --pico-form-element-border-color: var(--stroke-strong);
+      --pico-form-element-color: var(--text);
+      --pico-form-element-focus-color: var(--accent-soft);
     }
 
     * { box-sizing: border-box; }
@@ -136,6 +167,13 @@
       position: sticky;
       top: 0.75rem;
       z-index: 20;
+      transition: transform 0.22s ease, opacity 0.22s ease;
+      will-change: transform;
+    }
+    header.appbar.is-hidden {
+      transform: translateY(calc(-100% - 1.25rem));
+      opacity: 0;
+      pointer-events: none;
     }
 
     .brand {
@@ -225,6 +263,7 @@
       display: flex;
       flex-direction: column;
       justify-content: space-between;
+      margin: 0;
     }
     .card .label {
       color: var(--muted);
@@ -245,10 +284,23 @@
       font-size: 0.74rem;
       color: var(--text-secondary);
     }
-    .card.ok .value { color: var(--ok); }
-    .card.err .value { color: var(--err); }
-    .card.accent .value { color: var(--accent); }
 
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 0 0 0.85rem;
+      align-items: center;
+    }
+    .toolbar > * {
+      width: auto;
+      margin: 0;
+    }
+    .toolbar > input,
+    .toolbar > select,
+    .toolbar > button {
+      width: auto !important;
+    }
     .panel {
       border-radius: 20px;
       padding: 1rem;
@@ -263,13 +315,6 @@
       text-transform: uppercase;
     }
 
-    .toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      margin-bottom: 0.85rem;
-      align-items: center;
-    }
 
     input, select {
       font: inherit;
@@ -565,7 +610,7 @@
 </head>
 <body>
   <div class="ambient" aria-hidden="true"></div>
-  <div class="shell">
+  <main class="shell">
     <header class="appbar glass">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"></div>
@@ -599,23 +644,24 @@
 
     <div class="cards" id="cards"></div>
 
-    <section class="panel glass">
-      <div class="toolbar">
+    <section class="panel glass" aria-labelledby="request-log-title">
+      <h2 id="request-log-title">Request log</h2>
+      <form class="toolbar" id="filters">
         <select id="fModel" aria-label="model">
           <option value="">model</option>
         </select>
-        <input id="fUpstream" placeholder="upstream" spellcheck="false" />
-        <select id="fProtocol">
+        <input id="fUpstream" aria-label="upstream" placeholder="upstream" spellcheck="false" />
+        <select id="fProtocol" aria-label="protocol">
           <option value="">protocol</option>
           <option value="chat">chat</option>
           <option value="responses">responses</option>
           <option value="claude">claude</option>
         </select>
         <label class="chk"><input type="checkbox" id="fErrors" /> errors only</label>
-        <button type="button" class="btn" id="btnApply">Apply</button>
+        <button type="submit" class="btn" id="btnApply">Apply</button>
         <button type="button" class="btn ghost" id="btnRefresh">Refresh</button>
         <label class="chk"><input type="checkbox" id="autoRefresh" checked /> auto 5s</label>
-      </div>
+      </form>
 
       <div class="table-wrap">
         <table>
@@ -646,7 +692,7 @@
         </div>
       </div>
     </section>
-  </div>
+  </main>
 
   <dialog id="detail">
     <div class="dlg-head">
@@ -775,27 +821,45 @@
       return count > 0 ? count.toLocaleString() : '—';
     }
 
+    function fmtCompactTokens(value) {
+      const count = Number(value || 0);
+      if (!Number.isFinite(count) || count <= 0) return '0';
+      const abs = Math.abs(count);
+      if (abs >= 1_000_000) {
+        const m = count / 1_000_000;
+        return (abs >= 10_000_000 ? m.toFixed(0) : m.toFixed(1).replace(/\.0$/, '')) + 'M';
+      }
+      if (abs >= 1_000) {
+        const k = count / 1_000;
+        return (abs >= 10_000 ? k.toFixed(0) : k.toFixed(1).replace(/\.0$/, '')) + 'K';
+      }
+      return String(Math.round(count));
+    }
+
+    function fmtCacheHitRate(st) {
+      const input = Number(st.input_tokens || 0);
+      if (input <= 0) return '—';
+      const rate = Number(st.cache_hit_rate);
+      if (Number.isFinite(rate) && rate >= 0) {
+        return Math.round(rate * 100) + '%';
+      }
+      const cached = Number(st.cached_tokens || 0);
+      return Math.round((cached / input) * 100) + '%';
+    }
+
     function fmtTPS(outputTokens, durationMS) {
       const output = Number(outputTokens || 0);
       const duration = Number(durationMS || 0);
       return output > 0 && duration > 0 ? (output * 1000 / duration).toFixed(1) : '—';
     }
 
-    function fmtAggregateTPS(value) {
-      const tps = Number(value || 0);
-      return tps > 0 ? tps.toFixed(1) : '—';
-    }
-
     function renderCards(st) {
-      const rate = st.total > 0 ? Math.round(((st.success || 0) / st.total) * 100) : 0;
       const cards = [
-        { label: 'Total', value: st.total ?? 0, hint: 'all recorded requests' },
-        { label: 'Input tokens', value: Number(st.input_tokens || 0).toLocaleString(), hint: 'all recorded requests' },
-        { label: 'Output tokens', value: Number(st.output_tokens || 0).toLocaleString(), hint: 'all recorded requests' },
-        { label: 'TPS', value: fmtAggregateTPS(st.output_tps), cls: 'accent', hint: 'output tokens per second' },
-        { label: 'Success', value: st.success ?? 0, cls: 'ok', hint: rate + '% success rate' },
-        { label: 'Errors', value: st.errors ?? 0, cls: 'err', hint: 'status ≥ 400 or error' },
-        { label: 'Avg ms', value: Math.round(st.avg_duration_ms || 0), hint: 'mean duration' },
+        { label: '总请求', value: st.total ?? 0, hint: '全部已记录请求' },
+        { label: '输入 Token', value: fmtCompactTokens(st.input_tokens), hint: Number(st.input_tokens || 0).toLocaleString() },
+        { label: '输出 Token', value: fmtCompactTokens(st.output_tokens), hint: Number(st.output_tokens || 0).toLocaleString() },
+        { label: '错误', value: st.errors ?? 0, cls: 'err', hint: '状态码 ≥ 400 或存在错误' },
+        { label: '缓存命中率', value: fmtCacheHitRate(st), cls: 'accent', hint: 'cached / input tokens' },
       ];
       $('cards').innerHTML = cards.map(c =>
         `<div class="card glass ${c.cls || ''}">
@@ -960,7 +1024,11 @@
     $('detail').addEventListener('click', (ev) => {
       if (ev.target === $('detail')) $('detail').close();
     });
-    $('btnApply').onclick = () => { state.offset = 0; refresh(); };
+    $('filters').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      state.offset = 0;
+      refresh();
+    });
     $('btnRefresh').onclick = () => refresh();
     $('btnPrev').onclick = () => {
       state.offset = Math.max(0, state.offset - state.limit);
@@ -982,6 +1050,35 @@
 
     refresh();
     state.timer = setInterval(refresh, 5000);
+
+    (function setupHeaderAutoHide() {
+      const appbar = document.querySelector('header.appbar');
+      if (!appbar) return;
+      let lastY = window.scrollY || 0;
+      let ticking = false;
+      const threshold = 8;
+
+      const update = () => {
+        const y = window.scrollY || 0;
+        const delta = y - lastY;
+        if (y <= 16) {
+          appbar.classList.remove('is-hidden');
+        } else if (delta > threshold) {
+          appbar.classList.add('is-hidden');
+        } else if (delta < -threshold) {
+          appbar.classList.remove('is-hidden');
+        }
+        lastY = y;
+        ticking = false;
+      };
+
+      window.addEventListener('scroll', () => {
+        if (!ticking) {
+          window.requestAnimationFrame(update);
+          ticking = true;
+        }
+      }, { passive: true });
+    })();
   </script>
 </body>
 </html>

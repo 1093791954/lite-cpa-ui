@@ -50,4 +50,23 @@ func TestDashboardAliases(t *testing.T) {
 		}
 		dashboard = string(body)
 	}
+
+	cssResp, err := http.Get(baseURL + "/assets/pico-2.1.1.classless.min.css")
+	if err != nil {
+		t.Fatalf("GET Pico CSS: %v", err)
+	}
+	cssBody, readErr := io.ReadAll(cssResp.Body)
+	cssResp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read Pico CSS: %v", readErr)
+	}
+	if cssResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET Pico CSS status %d body %s", cssResp.StatusCode, cssBody)
+	}
+	if !strings.HasPrefix(cssResp.Header.Get("Content-Type"), "text/css") {
+		t.Fatalf("GET Pico CSS Content-Type %q", cssResp.Header.Get("Content-Type"))
+	}
+	if !strings.Contains(string(cssBody), "Pico CSS") {
+		t.Fatal("GET Pico CSS did not return the vendored stylesheet")
+	}
 }

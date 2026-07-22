@@ -12,6 +12,9 @@ import (
 //go:embed dashboard.html
 var dashboardHTML []byte
 
+//go:embed pico.classless.min.css
+var picoClasslessCSS []byte
+
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -20,6 +23,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(dashboardHTML)
+}
+
+func (s *Server) handlePicoClasslessCSS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	_, _ = w.Write(picoClasslessCSS)
 }
 
 func (s *Server) handleLogsStats(w http.ResponseWriter, r *http.Request) {
