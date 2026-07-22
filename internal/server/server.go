@@ -266,7 +266,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(v.Body)
-			s.logReq(reqID, r, protocol, model, key.Provider, key.Name, http.StatusOK, start, "", body, v.Body)
+			usage := usageFromResponse(v.Body)
+			s.logReq(reqID, r, protocol, model, key.Provider, key.Name, http.StatusOK, start, "", body, v.Body, usage)
 			return
 		case *executor.StreamResult:
 			flusher, ok := w.(http.Flusher)
@@ -281,6 +282,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 			w.WriteHeader(http.StatusOK)
 			flusher.Flush()
 			var streamErr string
+			var usage tokenUsage
 			for chunk := range v.Chunks {
 				if chunk.Err != nil {
 					if s.cfg.Debug {
@@ -295,6 +297,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 				if len(chunk.Payload) == 0 {
 					continue
 				}
+				usage.mergePayload(chunk.Payload)
 				if _, err := w.Write(chunk.Payload); err != nil {
 					streamErr = err.Error()
 					break
@@ -302,7 +305,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 				flusher.Flush()
 			}
 			// Streaming responses: do not store response body by default (memory).
-			s.logReq(reqID, r, protocol, model, key.Provider, key.Name, http.StatusOK, start, streamErr, body, nil)
+			s.logReq(reqID, r, protocol, model, key.Provider, key.Name, http.StatusOK, start, streamErr, body, nil, usage)
 			return
 		default:
 			lastErr = fmt.Errorf("unexpected executor result type %T", result)
@@ -335,7 +338,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 	s.logReq(reqID, r, protocol, model, lastKey.Provider, lastKey.Name, http.StatusBadGateway, start, "all upstream credentials failed", body, nil)
 }
 
-func (s *Server) logReq(id string, r *http.Request, protocol, model, provider, upstream string, status int, start time.Time, errMsg string, reqBody, respBody []byte) {
+func (s *Server) logReq(id string, r *http.Request, protocol, model, provider, upstream string, status int, start time.Time, errMsg string, reqBody, respBody []byte, usage ...tokenUsage) {
 	if s.logger == nil || !s.logger.Enabled() {
 		return
 	}
@@ -352,6 +355,10 @@ func (s *Server) logReq(id string, r *http.Request, protocol, model, provider, u
 		UserAgent:  r.UserAgent(),
 		DurationMS: time.Since(start).Milliseconds(),
 		Error:      errMsg,
+	}
+	if len(usage) > 0 {
+		rec.InputTokens = usage[0].inputTokens
+		rec.OutputTokens = usage[0].outputTokens
 	}
 	if s.cfg.RequestLog.StoreBody {
 		// Cap stored bodies to keep memory/disk bounded.

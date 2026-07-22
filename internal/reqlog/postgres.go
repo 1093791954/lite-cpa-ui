@@ -49,11 +49,21 @@ CREATE TABLE IF NOT EXISTS request_logs (
   upstream TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
   duration_ms BIGINT NOT NULL DEFAULT 0,
+  input_tokens BIGINT NOT NULL DEFAULT 0,
+  output_tokens BIGINT NOT NULL DEFAULT 0,
   error TEXT NOT NULL DEFAULT '',
   req_body TEXT NOT NULL DEFAULT '',
   resp_body TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_ts ON request_logs(ts);
+`)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+ALTER TABLE request_logs
+  ADD COLUMN IF NOT EXISTS input_tokens BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS output_tokens BIGINT NOT NULL DEFAULT 0;
 `)
 	return err
 }
@@ -62,8 +72,8 @@ func (s *PostgresStore) Insert(ctx context.Context, r Record) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO request_logs (
   request_id, ts, method, path, status_code, model, protocol, provider, upstream,
-  user_agent, duration_ms, error, req_body, resp_body
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+  user_agent, duration_ms, input_tokens, output_tokens, error, req_body, resp_body
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 		r.RequestID,
 		r.Timestamp.UTC(),
 		r.Method,
@@ -75,6 +85,8 @@ INSERT INTO request_logs (
 		r.Upstream,
 		r.UserAgent,
 		r.DurationMS,
+		r.InputTokens,
+		r.OutputTokens,
 		r.Error,
 		r.ReqBody,
 		r.RespBody,
@@ -107,7 +119,7 @@ func (s *PostgresStore) List(ctx context.Context, f ListFilter) ([]Record, int64
 	limitIdx := len(args) + 1
 	offsetIdx := len(args) + 2
 	q := fmt.Sprintf(`SELECT id, request_id, ts, method, path, status_code, model, protocol, provider, upstream,
-  user_agent, duration_ms, error, req_body, resp_body
+  user_agent, duration_ms, input_tokens, output_tokens, error, req_body, resp_body
 FROM request_logs%s ORDER BY ts DESC, id DESC LIMIT $%d OFFSET $%d`, where, limitIdx, offsetIdx)
 	listArgs := append(append([]any{}, args...), f.Limit, f.Offset)
 	rows, err := s.db.QueryContext(ctx, q, listArgs...)
@@ -122,7 +134,7 @@ FROM request_logs%s ORDER BY ts DESC, id DESC LIMIT $%d OFFSET $%d`, where, limi
 		if err := rows.Scan(
 			&r.ID, &r.RequestID, &r.Timestamp, &r.Method, &r.Path, &r.StatusCode,
 			&r.Model, &r.Protocol, &r.Provider, &r.Upstream,
-			&r.UserAgent, &r.DurationMS, &r.Error, &r.ReqBody, &r.RespBody,
+			&r.UserAgent, &r.DurationMS, &r.InputTokens, &r.OutputTokens, &r.Error, &r.ReqBody, &r.RespBody,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -140,10 +152,17 @@ func (s *PostgresStore) Stats(ctx context.Context) (Stats, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*),
        COALESCE(SUM(CASE WHEN status_code >= 400 OR error <> '' THEN 1 ELSE 0 END), 0),
-       COALESCE(AVG(duration_ms), 0)
+       COALESCE(AVG(duration_ms), 0),
+       COALESCE(SUM(input_tokens), 0),
+       COALESCE(SUM(output_tokens), 0),
+       COALESCE(SUM(CASE WHEN duration_ms > 0 THEN duration_ms ELSE 0 END), 0)
 FROM request_logs`)
-	if err := row.Scan(&st.Total, &st.Errors, &st.AvgDurationMS); err != nil {
+	var totalDurationMS int64
+	if err := row.Scan(&st.Total, &st.Errors, &st.AvgDurationMS, &st.InputTokens, &st.OutputTokens, &totalDurationMS); err != nil {
 		return Stats{}, err
+	}
+	if totalDurationMS > 0 {
+		st.OutputTPS = float64(st.OutputTokens) * 1000 / float64(totalDurationMS)
 	}
 
 	var err error

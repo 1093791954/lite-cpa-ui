@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
   upstream TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
   duration_ms INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
   error TEXT NOT NULL DEFAULT '',
   req_body TEXT NOT NULL DEFAULT '',
   resp_body TEXT NOT NULL DEFAULT ''
@@ -57,7 +59,19 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_ts ON request_logs(ts);
 `); err != nil {
 		return err
 	}
-	return s.migrateTsToIntegerIfNeeded()
+	if err := s.migrateTsToIntegerIfNeeded(); err != nil {
+		return err
+	}
+	return s.addTokenColumns()
+}
+
+func (s *SQLiteStore) addTokenColumns() error {
+	for _, column := range []string{"input_tokens", "output_tokens"} {
+		if _, err := s.db.Exec(`ALTER TABLE request_logs ADD COLUMN ` + column + ` INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return fmt.Errorf("add %s: %w", column, err)
+		}
+	}
+	return nil
 }
 
 // migrateTsToIntegerIfNeeded rewrites legacy TEXT RFC3339Nano ts columns to
@@ -95,6 +109,8 @@ CREATE TABLE request_logs_new (
   upstream TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
   duration_ms INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
   error TEXT NOT NULL DEFAULT '',
   req_body TEXT NOT NULL DEFAULT '',
   resp_body TEXT NOT NULL DEFAULT ''
@@ -216,8 +232,8 @@ func (s *SQLiteStore) Insert(ctx context.Context, r Record) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO request_logs (
   request_id, ts, method, path, status_code, model, protocol, provider, upstream,
-  user_agent, duration_ms, error, req_body, resp_body
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  user_agent, duration_ms, input_tokens, output_tokens, error, req_body, resp_body
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.RequestID,
 		r.Timestamp.UTC().UnixNano(),
 		r.Method,
@@ -229,6 +245,8 @@ INSERT INTO request_logs (
 		r.Upstream,
 		r.UserAgent,
 		r.DurationMS,
+		r.InputTokens,
+		r.OutputTokens,
 		r.Error,
 		r.ReqBody,
 		r.RespBody,
@@ -259,7 +277,7 @@ func (s *SQLiteStore) List(ctx context.Context, f ListFilter) ([]Record, int64, 
 	}
 
 	q := `SELECT id, request_id, ts, method, path, status_code, model, protocol, provider, upstream,
-  user_agent, duration_ms, error, req_body, resp_body
+  user_agent, duration_ms, input_tokens, output_tokens, error, req_body, resp_body
 FROM request_logs` + where + ` ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`
 	listArgs := append(append([]any{}, args...), f.Limit, f.Offset)
 	rows, err := s.db.QueryContext(ctx, q, listArgs...)
@@ -275,7 +293,7 @@ FROM request_logs` + where + ` ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`
 		if err := rows.Scan(
 			&r.ID, &r.RequestID, &ts, &r.Method, &r.Path, &r.StatusCode,
 			&r.Model, &r.Protocol, &r.Provider, &r.Upstream,
-			&r.UserAgent, &r.DurationMS, &r.Error, &r.ReqBody, &r.RespBody,
+			&r.UserAgent, &r.DurationMS, &r.InputTokens, &r.OutputTokens, &r.Error, &r.ReqBody, &r.RespBody,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -293,10 +311,17 @@ func (s *SQLiteStore) Stats(ctx context.Context) (Stats, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*),
        COALESCE(SUM(CASE WHEN status_code >= 400 OR error != '' THEN 1 ELSE 0 END), 0),
-       COALESCE(AVG(duration_ms), 0)
+       COALESCE(AVG(duration_ms), 0),
+       COALESCE(SUM(input_tokens), 0),
+       COALESCE(SUM(output_tokens), 0),
+       COALESCE(SUM(CASE WHEN duration_ms > 0 THEN duration_ms ELSE 0 END), 0)
 FROM request_logs`)
-	if err := row.Scan(&st.Total, &st.Errors, &st.AvgDurationMS); err != nil {
+	var totalDurationMS int64
+	if err := row.Scan(&st.Total, &st.Errors, &st.AvgDurationMS, &st.InputTokens, &st.OutputTokens, &totalDurationMS); err != nil {
 		return Stats{}, err
+	}
+	if totalDurationMS > 0 {
+		st.OutputTPS = float64(st.OutputTokens) * 1000 / float64(totalDurationMS)
 	}
 
 	var err error

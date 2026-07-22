@@ -21,6 +21,9 @@ type Stats struct {
 	Errors        int64       `json:"errors"`
 	Success       int64       `json:"success"`
 	AvgDurationMS float64     `json:"avg_duration_ms"`
+	InputTokens   int64       `json:"input_tokens"`
+	OutputTokens  int64       `json:"output_tokens"`
+	OutputTPS     float64     `json:"output_tps"`
 	ByStatus      []NameCount `json:"by_status"`
 	ByModel       []NameCount `json:"by_model"`
 	ByUpstream    []NameCount `json:"by_upstream"`
