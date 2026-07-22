@@ -115,3 +115,32 @@ openai-completions:
 		t.Fatalf("default -> %q", cfg.OpenAICompletions[1].FailoverMode)
 	}
 }
+
+func TestProviderSpeedNormalizeAndValidate(t *testing.T) {
+	var cfg Config
+	raw := `
+port: 1
+api-keys: [k]
+openai-completions:
+  - name: official
+    speed: " FAST "
+    base-url: http://x
+    api-key: a
+    models: [{name: m}]
+`
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.applyDefaults()
+	if cfg.OpenAICompletions[0].Speed != "fast" {
+		t.Fatalf("speed = %q, want fast", cfg.OpenAICompletions[0].Speed)
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate fast speed: %v", err)
+	}
+
+	cfg.OpenAICompletions[0].Speed = "turbo"
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "speed must be fast") {
+		t.Fatalf("validate invalid speed = %v, want speed validation error", err)
+	}
+}

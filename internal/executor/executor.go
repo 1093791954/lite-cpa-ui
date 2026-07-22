@@ -18,6 +18,8 @@ import (
 
 const streamScanMax = 1 << 20 // 1MiB
 
+const anthropicFastModeBeta = "fast-mode-2026-02-01"
+
 type Result struct {
 	Status  int
 	Headers http.Header
@@ -72,6 +74,7 @@ func Execute(ctx context.Context, key registry.UpstreamKey, upstreamModel string
 	if err != nil {
 		return nil, err
 	}
+	key, translated = applyProviderSpeed(key, translated)
 
 	switch key.Provider {
 	case "openai":
@@ -92,6 +95,54 @@ func Execute(ctx context.Context, key registry.UpstreamKey, upstreamModel string
 	default:
 		return nil, fmt.Errorf("unknown provider %q", key.Provider)
 	}
+}
+
+// applyProviderSpeed keeps fast-tier billing under provider administrator control.
+// Provider speed overrides the client request; without it, client-selected fast tiers are removed.
+func applyProviderSpeed(key registry.UpstreamKey, body []byte) (registry.UpstreamKey, []byte) {
+	switch key.Provider {
+	case "claude":
+		body, _ = sjson.DeleteBytes(body, "speed")
+		if key.Speed == "fast" {
+			body, _ = sjson.SetBytes(body, "speed", "fast")
+			key.Headers = appendHeaderToken(key.Headers, "Anthropic-Beta", anthropicFastModeBeta)
+		}
+	case "openai", "openai-response":
+		body, _ = sjson.DeleteBytes(body, "service_tier")
+		if key.Speed == "fast" {
+			body, _ = sjson.SetBytes(body, "service_tier", "priority")
+		}
+	}
+	return key, body
+}
+
+func appendHeaderToken(headers map[string]string, name, token string) map[string]string {
+	merged := make(map[string]string, len(headers)+1)
+	seen := make(map[string]struct{})
+	values := make([]string, 0, 4)
+	appendTokens := func(raw string) {
+		for _, value := range strings.Split(raw, ",") {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			values = append(values, value)
+		}
+	}
+	for key, value := range headers {
+		if strings.EqualFold(key, name) {
+			appendTokens(value)
+			continue
+		}
+		merged[key] = value
+	}
+	appendTokens(token)
+	merged[name] = strings.Join(values, ",")
+	return merged
 }
 
 func executeOpenAI(ctx context.Context, key registry.UpstreamKey, from, to translator.Format, model string, original, body []byte) (*Result, error) {

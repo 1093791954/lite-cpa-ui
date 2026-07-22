@@ -31,13 +31,18 @@ Match is **substring**, case-insensitive (`proxy-claude-x` matches `claude`).
 
 ### 2. Session identity must be present
 
-Extraction order:
+Extraction order is defined in `internal/affinity/cli_sessions.go` (single catalog for coding CLIs):
 
-1. **Session headers** (first non-empty):  
-   `Session-Id`, `session_id`, `X-Session-Id`, `Thread-Id`, …
+1. **Sticky session headers** (first non-empty), priority roughly:
+   - Product: `X-Claude-Code-Session-Id`, `x-opencode-session`
+   - Codex / Pi: `session-id` / `session_id`, `thread-id` / `thread_id`, `Conversation_id`
+   - Generic: `X-Session-Id`, `x-session-affinity`
+   - Weak / last: `X-Client-Request-Id` (Pi; may be per-request on Codex)
 2. **Protocol body** (if no session header):
-   - path contains `/messages` → `metadata.user_id`, then `prompt_cache_key`
+   - path contains `/messages` → `metadata.user_id` (Claude legacy / JSON session normalized to UUID), then `prompt_cache_key`
    - `/responses` or chat completions → `prompt_cache_key`, then `metadata.user_id`
+
+Priority CLIs: **claude-code, codex, pi, oh-my-pi, opencode, kimi-code, mimo-code, zcode**.
 
 If neither is present → **no stickiness**; normal selection.
 

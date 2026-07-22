@@ -31,9 +31,9 @@ request-log:
   #   dsn: "postgres://litecpa:litecpa@postgres:5432/litecpa?sslmode=disable"
 
 # Provider field order / 字段顺序:
-#   name → proxy-url → priority → failover-mode → headers → base-url → api-key → models
-# failover-mode: key (official) | provider (relay / 中转)
-# proxy-url: provider-level only / 仅供应商级
+#   name → proxy-url → priority → failover-mode → headers → speed → base-url → api-key → models
+# speed: fast is administrator-only. Anthropic adds speed + fast-mode beta; OpenAI adds service_tier: priority.
+# Unset blocks client-selected fast tiers. Configure only against upstreams that support their native fast tier.
 
 # anthropic-messages:
 #   - name: "anthropic-official"
@@ -42,6 +42,7 @@ request-log:
 #     failover-mode: "key"
 #     headers:
 #       User-Agent: "claude-cli/2.1.63 (external, cli)"
+#     speed: "fast"
 #     base-url: "https://api.anthropic.com"
 #     api-key: "sk-ant-your-key"
 #     models:
@@ -55,6 +56,7 @@ request-log:
 #     failover-mode: "key"
 #     headers:
 #       User-Agent: "codex_cli_rs/0.144.1"
+#     speed: "fast"
 #     base-url: "https://api.openai.com/v1"
 #     api-key: "sk-openai-official-key"
 #     models:
@@ -67,6 +69,7 @@ request-log:
 #     failover-mode: "provider"
 #     headers:
 #       User-Agent: "codex_cli_rs/0.144.1"
+#     speed: "fast"
 #     base-url: "https://ai.laysath.cn/v1"
 #     api-key-entries:
 #       - api-key: "sk-laysath-1"
@@ -86,6 +89,7 @@ request-log:
 #     failover-mode: "key"
 #     headers:
 #       User-Agent: "curl/8.7.1"
+#     speed: "fast"
 #     base-url: "https://api.deepseek.com/v1"
 #     api-key: "sk-deepseek-key"
 #     models:

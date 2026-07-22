@@ -43,6 +43,7 @@ func TestChatCompletionsToOpenAIUpstream(t *testing.T) {
 			Name:    "mock",
 			BaseURL: up.URL,
 			APIKey:  "sk-up",
+			Speed:   "fast",
 			Models:  []config.ModelAlias{{Name: "mock-model", Alias: "mock-model"}},
 		}},
 	}
@@ -79,6 +80,9 @@ func TestChatCompletionsToOpenAIUpstream(t *testing.T) {
 	}
 	if gjson.Get(gotBody, "model").String() != "mock-model" {
 		t.Fatalf("upstream body %s", gotBody)
+	}
+	if gjson.Get(gotBody, "service_tier").String() != "priority" {
+		t.Fatalf("service_tier %q, want priority; body=%s", gjson.Get(gotBody, "service_tier").String(), gotBody)
 	}
 }
 
@@ -329,11 +333,13 @@ func TestOpenAIToAnthropicNonStream(t *testing.T) {
 	translator.RegisterBuiltin()
 
 	var gotStream bool
-	var gotPath string
+	var gotPath, gotSpeed, gotBeta string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		body, _ := io.ReadAll(r.Body)
 		gotStream = gjson.GetBytes(body, "stream").Bool()
+		gotSpeed = gjson.GetBytes(body, "speed").String()
+		gotBeta = r.Header.Get("Anthropic-Beta")
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(claudeSSEFixture()))
 	}))
@@ -345,6 +351,8 @@ func TestOpenAIToAnthropicNonStream(t *testing.T) {
 		AnthropicMessages: []config.Provider{{
 			BaseURL: up.URL,
 			APIKey:  "sk-ant",
+			Speed:   "fast",
+			Headers: map[string]string{"anthropic-beta": "oauth-2025-04-20"},
 			Models:  []config.ModelAlias{{Name: "claude-sonnet-4", Alias: "claude-sonnet-4"}},
 		}},
 	}
@@ -384,6 +392,12 @@ func TestOpenAIToAnthropicNonStream(t *testing.T) {
 	}
 	if !gotStream {
 		t.Fatal("expected cross-format nonstream client to request Anthropic stream=true for NonStream aggregator")
+	}
+	if gotSpeed != "fast" {
+		t.Fatalf("upstream speed %q, want fast", gotSpeed)
+	}
+	if !strings.Contains(gotBeta, "fast-mode-2026-02-01") {
+		t.Fatalf("Anthropic-Beta %q missing fast-mode token", gotBeta)
 	}
 }
 

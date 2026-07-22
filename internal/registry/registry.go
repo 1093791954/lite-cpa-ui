@@ -33,6 +33,7 @@ type UpstreamKey struct {
 	BaseURL      string
 	APIKey       string
 	Priority     int
+	Speed        string // provider-controlled fast tier; empty blocks client-selected tiers
 	Headers      map[string]string
 	ProxyURL     string
 	FailoverMode string // key | provider (from provider config)

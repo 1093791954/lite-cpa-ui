@@ -148,6 +148,23 @@ openai-completions:
 
 If `headers.User-Agent` is unset, Go sends the default `Go-http-client/1.1`.
 
+
+### Provider fast mode
+
+`speed: fast` is an administrator-only provider policy. It applies to every request routed to that provider: Anthropic upstreams receive `speed: "fast"` and `Anthropic-Beta: fast-mode-2026-02-01`; OpenAI upstreams receive `service_tier: "priority"`. When omitted, lite-cpa removes client-supplied fast-tier fields, so clients cannot change speed or billing. Configure it only for upstreams that support their native fast tier.
+
+```yaml
+anthropic-messages:
+  - name: anthropic-fast
+    speed: fast
+    # ...
+
+openai-responses:
+  - name: openai-fast
+    speed: fast
+    # ...
+```
+
 ### Failover mode
 
 Per **provider** (`name`), not global. After a retriable error (401/403/429/5xx):
@@ -196,7 +213,7 @@ channel-affinity: [claude, gpt, grok]
 # channel-affinity: false
 ```
 
-Sticky identity (first present wins): session headers (`Session-Id` / `session_id` / `X-Session-Id` / `Thread-Id`) → protocol body (`/v1/messages` uses `metadata.user_id`, `/v1/responses` & chat use `prompt_cache_key`). Model family match is substring (e.g. `proxy-claude-x` matches `claude`). No identity field → normal round-robin.
+Sticky identity catalog: `internal/affinity/cli_sessions.go`. First present wins: CLI session headers (`X-Claude-Code-Session-Id`, `x-opencode-session`, `session-id`/`session_id`, `X-Session-Id`, `x-session-affinity`, `X-Client-Request-Id`, …) → protocol body (`/v1/messages` uses normalized `metadata.user_id`, `/v1/responses` & chat use `prompt_cache_key`). Priority CLIs: claude-code, codex, pi, oh-my-pi, opencode, kimi-code, mimo-code, zcode. No identity field → normal round-robin.
 
 ### Request log
 

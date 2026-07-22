@@ -18,7 +18,7 @@ lite-cpa is a slim Go gateway: protocol conversion among OpenAI Chat Completions
 | `internal/server/` | HTTP handlers, retry / failover loop |
 | `internal/pool/` | Build registry from config; key selection |
 | `internal/registry/` | Model alias → `UpstreamKey` pool (merged by alias) |
-| `internal/affinity/` | Sticky key memory (process-local) |
+| `internal/affinity/` | Sticky key memory + CLI session catalog (`cli_sessions.go`) |
 | `internal/executor/` | Upstream HTTP + stream/non-stream |
 | `internal/translator/` | Format conversion (`chat` ↔ `responses` ↔ `claude`) |
 | `internal/config/` | YAML load, defaults, validation |
@@ -81,9 +81,10 @@ Three lists (same `Provider` shape):
 3. `priority`
 4. `failover-mode`
 5. `headers`
-6. `base-url`
-7. `api-key` and/or `api-key-entries`
-8. `models`
+6. `speed`
+7. `base-url`
+8. `api-key` and/or `api-key-entries`
+9. `models`
 
 #### Field reference
 
@@ -94,6 +95,7 @@ Three lists (same `Provider` shape):
 | `priority` | provider / entry | Lower number = higher priority. |
 | `failover-mode` | provider | `key` (default) or `provider`. See [Failover](#failover). |
 | `headers` | provider | Extra upstream headers. `User-Agent` recommended; unset → Go default `Go-http-client/1.1`. |
+| `speed` | provider | Optional `fast` only. Administrator-controlled: Anthropic sends `speed: "fast"` plus `fast-mode-2026-02-01`; OpenAI sends `service_tier: "priority"`. When absent, client-selected fast tiers are removed. Configure only for upstreams that support their native tier. |
 | `base-url` | provider | Upstream base (no trailing slash required). |
 | `api-key` | provider | Single key. Ignored if `api-key-entries` is non-empty. |
 | `api-key-entries[]` | provider | Multi-key pool: `api-key`, optional `priority`. |
@@ -145,13 +147,19 @@ channel-affinity:
   default-ttl-seconds: 600
 ```
 
-**Identity extraction order**
+**Identity extraction order** (catalog: `internal/affinity/cli_sessions.go`)
 
-1. Session headers: `Session-Id`, `session_id`, `X-Session-Id`, `Thread-Id`, …
+1. Sticky session headers (first non-empty), including:
+   - Claude Code: `X-Claude-Code-Session-Id`
+   - OpenCode: `x-opencode-session`, `x-session-affinity`, `X-Session-Id`
+   - Codex / Pi / oh-my-pi: `session-id` / `session_id`, `thread-id` / `thread_id`, `X-Client-Request-Id`
+   - Amp: `X-Amp-Thread-Id`
 2. Protocol body by path:
-   - `/v1/messages` → `metadata.user_id` (then `prompt_cache_key`)
-   - `/v1/responses` and chat completions → `prompt_cache_key` (then `metadata.user_id`)
+   - `/v1/messages` → `metadata.user_id` (Claude/OpenCode formats normalized to session UUID) then `prompt_cache_key`
+   - `/v1/responses` and chat completions → `prompt_cache_key` then `metadata.user_id`
 3. No identity field → no stickiness; normal round-robin
+
+Priority CLIs covered in the catalog: claude-code, codex, pi, oh-my-pi, opencode, kimi-code, mimo-code, zcode.
 
 **Model family match:** substring, case-insensitive (e.g. `proxy-claude-x` matches `claude`).
 
@@ -322,7 +330,7 @@ Entrypoint: `lite-cpa --config /app/config.yaml`.
 
 - Preserve client body size limits if you raise `max-body-bytes`.
 - For streaming, disable response buffering (e.g. nginx `proxy_buffering off`).
-- Do not strip headers used for affinity: `Session-Id` / `session_id` / `X-Session-Id` / `Thread-Id` (nginx by default drops headers with underscores unless `underscores_in_headers on`).
+- Do not strip headers used for affinity: `session-id` / `session_id` / `X-Session-Id` / `Thread-Id` / `x-opencode-session` / `X-Claude-Code-Session-Id` / `X-Client-Request-Id` / `x-session-affinity` (nginx by default drops headers with underscores unless `underscores_in_headers on`).
 
 ### Checklist
 

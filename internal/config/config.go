@@ -198,7 +198,7 @@ type PostgresLogConfig struct {
 // Provider is a named upstream entry with multi-key support.
 // Preferred config field order:
 //
-//	name, proxy-url, priority, failover-mode, headers, base-url, api-key, models
+//	name, proxy-url, priority, failover-mode, headers, speed, base-url, api-key, models
 //
 // Headers may include User-Agent to override Go's default "Go-http-client/1.1".
 type Provider struct {
@@ -208,12 +208,14 @@ type Provider struct {
 	// FailoverMode is per-provider: "key" (default) or "provider".
 	// "provider" skips all keys under this name after one retriable failure
 	// (useful for relay sites where all keys die together).
-	FailoverMode  string            `yaml:"failover-mode,omitempty"`
-	Headers       map[string]string `yaml:"headers"`
-	BaseURL       string            `yaml:"base-url"`
-	APIKey        string            `yaml:"api-key"`
-	APIKeyEntries []APIKeyEntry     `yaml:"api-key-entries"`
-	Models        []ModelAlias      `yaml:"models"`
+	FailoverMode string            `yaml:"failover-mode,omitempty"`
+	Headers      map[string]string `yaml:"headers"`
+	// Speed forces the provider's supported fast tier. Empty prevents client-selected fast tiers.
+	Speed         string        `yaml:"speed,omitempty"`
+	BaseURL       string        `yaml:"base-url"`
+	APIKey        string        `yaml:"api-key"`
+	APIKeyEntries []APIKeyEntry `yaml:"api-key-entries"`
+	Models        []ModelAlias  `yaml:"models"`
 }
 
 type APIKeyEntry struct {
@@ -255,6 +257,9 @@ func (c *Config) applyDefaults() {
 	normalizeProviderFailovers(c.AnthropicMessages)
 	normalizeProviderFailovers(c.OpenAIResponses)
 	normalizeProviderFailovers(c.OpenAICompletions)
+	normalizeProviderSpeeds(c.AnthropicMessages)
+	normalizeProviderSpeeds(c.OpenAIResponses)
+	normalizeProviderSpeeds(c.OpenAICompletions)
 	if c.RequestLog.Backend == "" {
 		c.RequestLog.Backend = "sqlite"
 	}
@@ -316,14 +321,23 @@ func DefaultChannelAffinityRules() []ChannelAffinityRule {
 }
 
 // defaultAffinityKeySources is a fallback list for advanced/custom rules.
-// Runtime extraction prefers: session headers → protocol body field.
+// Runtime extraction prefers the CLI catalog in internal/affinity/cli_sessions.go
+// (sticky headers → protocol body). This list remains for custom rules that
+// only set KeySources without relying on the catalog.
 func defaultAffinityKeySources() []ChannelAffinityKeySource {
 	return []ChannelAffinityKeySource{
+		// Product / CLI session headers (see affinity.StickySessionHeaders)
+		{Type: "request_header", Key: "X-Claude-Code-Session-Id"},
+		{Type: "request_header", Key: "x-opencode-session"},
+		{Type: "request_header", Key: "session-id"},
 		{Type: "request_header", Key: "Session-Id"},
 		{Type: "request_header", Key: "session_id"},
-		{Type: "request_header", Key: "X-Session-Id"},
+		{Type: "request_header", Key: "thread-id"},
 		{Type: "request_header", Key: "Thread-Id"},
 		{Type: "request_header", Key: "thread_id"},
+		{Type: "request_header", Key: "X-Session-Id"},
+		{Type: "request_header", Key: "x-session-affinity"},
+		{Type: "request_header", Key: "X-Client-Request-Id"},
 		// protocol fields (order refined at runtime by path)
 		{Type: "gjson", Path: "prompt_cache_key"},
 		{Type: "gjson", Path: "metadata.user_id"},
@@ -389,6 +403,13 @@ func (c *Config) validate() error {
 				}
 				return fmt.Errorf("provider %q failover-mode must be key or provider, got %q", name, p.FailoverMode)
 			}
+			if p.Speed != "" && p.Speed != "fast" {
+				name := strings.TrimSpace(p.Name)
+				if name == "" {
+					name = fmt.Sprintf("#%d", i)
+				}
+				return fmt.Errorf("provider %q speed must be fast when set, got %q", name, p.Speed)
+			}
 		}
 	}
 
@@ -425,6 +446,12 @@ func NormalizeFailoverMode(mode string) string {
 func normalizeProviderFailovers(ps []Provider) {
 	for i := range ps {
 		ps[i].FailoverMode = NormalizeFailoverMode(ps[i].FailoverMode)
+	}
+}
+
+func normalizeProviderSpeeds(ps []Provider) {
+	for i := range ps {
+		ps[i].Speed = strings.ToLower(strings.TrimSpace(ps[i].Speed))
 	}
 }
 

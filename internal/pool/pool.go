@@ -18,7 +18,7 @@ func BuildRegistry(cfg *config.Config) *registry.Registry {
 
 	for i, p := range cfg.AnthropicMessages {
 		name := providerName(p.Name, "anthropic", i)
-		keys := expandProvider("claude", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.APIKeyEntries, cfg.ProxyURL, p.FailoverMode)
+		keys := expandProvider("claude", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.Speed, p.APIKeyEntries, cfg.ProxyURL, p.FailoverMode)
 		for _, m := range p.Models {
 			alias := m.ResolvedAlias()
 			if alias == "" {
@@ -32,7 +32,7 @@ func BuildRegistry(cfg *config.Config) *registry.Registry {
 
 	for i, p := range cfg.OpenAIResponses {
 		name := providerName(p.Name, "responses", i)
-		keys := expandProvider("openai-response", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.APIKeyEntries, cfg.ProxyURL, p.FailoverMode)
+		keys := expandProvider("openai-response", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.Speed, p.APIKeyEntries, cfg.ProxyURL, p.FailoverMode)
 		for _, m := range p.Models {
 			alias := m.ResolvedAlias()
 			if alias == "" {
@@ -46,7 +46,7 @@ func BuildRegistry(cfg *config.Config) *registry.Registry {
 
 	for i, p := range cfg.OpenAICompletions {
 		name := providerName(p.Name, "compat", i)
-		keys := expandProvider("openai", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.APIKeyEntries, cfg.ProxyURL, p.FailoverMode)
+		keys := expandProvider("openai", name, p.BaseURL, p.APIKey, p.ProxyURL, p.Priority, p.Headers, p.Speed, p.APIKeyEntries, cfg.ProxyURL, p.FailoverMode)
 		for _, m := range p.Models {
 			alias := m.ResolvedAlias()
 			if alias == "" {
@@ -68,7 +68,7 @@ func providerName(name, fallbackPrefix string, index int) string {
 	return fmt.Sprintf("%s-%d", fallbackPrefix, index)
 }
 
-func expandProvider(provider, name, baseURL, flatKey, flatProxy string, flatPriority int, headers map[string]string, entries []config.APIKeyEntry, globalProxy, failoverMode string) []registry.UpstreamKey {
+func expandProvider(provider, name, baseURL, flatKey, flatProxy string, flatPriority int, headers map[string]string, speed string, entries []config.APIKeyEntry, globalProxy, failoverMode string) []registry.UpstreamKey {
 	baseURL = trimSlash(baseURL)
 	failoverMode = config.NormalizeFailoverMode(failoverMode)
 	expanded := config.ExpandKeys(flatKey, flatPriority, entries)
@@ -94,6 +94,7 @@ func expandProvider(provider, name, baseURL, flatKey, flatProxy string, flatPrio
 			BaseURL:      baseURL,
 			APIKey:       e.APIKey,
 			Priority:     priority,
+			Speed:        speed,
 			Headers:      h,
 			ProxyURL:     proxy,
 			FailoverMode: failoverMode,

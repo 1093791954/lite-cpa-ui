@@ -148,6 +148,23 @@ openai-completions:
 
 未配置 `headers.User-Agent` 时，Go 默认发送 `Go-http-client/1.1`。
 
+
+### Provider Fast 模式
+
+`speed: fast` 是仅由管理员配置的 provider 策略，会作用于该 provider 的每一次请求：Anthropic 上游会收到 `speed: "fast"` 与 `Anthropic-Beta: fast-mode-2026-02-01`；OpenAI 上游会收到 `service_tier: "priority"`。未配置时，lite-cpa 会移除客户端携带的 fast tier 字段，客户端不能自行改变速度或计费。只应在确认上游支持其原生 fast tier 时配置。
+
+```yaml
+anthropic-messages:
+  - name: anthropic-fast
+    speed: fast
+    # ...
+
+openai-responses:
+  - name: openai-fast
+    speed: fast
+    # ...
+```
+
 ### 故障切换模式
 
 挂在 **provider（`name`）** 上，不是全局。可重试错误（401/403/429/5xx）后：
@@ -196,7 +213,7 @@ channel-affinity: [claude, gpt, grok]
 # channel-affinity: false
 ```
 
-亲和值优先级：session 请求头（`Session-Id` / `session_id` / `X-Session-Id` / `Thread-Id`）→ 协议 body（`/v1/messages` 用 `metadata.user_id`，`/v1/responses` 与 chat 用 `prompt_cache_key`）。模型族用子串匹配（如 `proxy-claude-x` 命中 `claude`）。没有身份字段 → 普通轮询。
+亲和身份总表：`internal/affinity/cli_sessions.go`。优先级：CLI session 头（`X-Claude-Code-Session-Id`、`x-opencode-session`、`session-id`/`session_id`、`X-Session-Id`、`x-session-affinity`、`X-Client-Request-Id` …）→ 协议 body（`/v1/messages` 用归一化后的 `metadata.user_id`，`/v1/responses` 与 chat 用 `prompt_cache_key`）。优先 CLI：claude-code、codex、pi、oh-my-pi、opencode、kimi-code、mimo-code、zcode。没有身份字段 → 普通轮询。
 
 ### 请求记录
 

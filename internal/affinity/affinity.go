@@ -1,9 +1,9 @@
 // Package affinity implements rule-based upstream key stickiness.
 //
 // Identity order:
-//  1. session headers (Session-Id / session_id / X-Session-Id / Thread-Id)
+//  1. sticky session headers (see cli_sessions.go catalog)
 //  2. protocol body field by path:
-//     - /v1/messages → metadata.user_id
+//     - /v1/messages → metadata.user_id (Claude-normalized)
 //     - /v1/responses or /chat/completions → prompt_cache_key
 //  3. remaining rule KeySources as fallback
 //
@@ -193,25 +193,23 @@ func ResolvePreferred(keys []registry.UpstreamKey, preferredID string, tried map
 }
 
 // extractAffinityValue implements:
-//  1. session headers first
-//  2. protocol-native body field (by path)
+//  1. sticky session headers first (CLI catalog)
+//  2. protocol-native body field (by path, Claude user_id normalized)
 //  3. remaining configured key sources
 //
 // Match only when a field is present (non-empty).
 func extractAffinityValue(sources []config.ChannelAffinityKeySource, path string, headers http.Header, body []byte) (string, bool) {
-	// 1) session first
-	if v, ok := extractSessionHeader(headers); ok {
+	// 1) sticky session headers (CLI catalog priority)
+	if v, ok := extractStickySessionHeader(headers); ok {
 		return v, true
 	}
 
 	// 2) protocol body field
-	for _, pathExpr := range protocolBodyPaths(path) {
-		if v, ok := extractGJSON(body, pathExpr); ok {
-			return v, true
-		}
+	if v, ok := extractProtocolBodyValue(path, body); ok {
+		return v, true
 	}
 
-	// 3) configured sources (skip session headers / body paths already tried)
+	// 3) configured sources (skip headers / body paths already tried)
 	triedBody := map[string]struct{}{}
 	for _, p := range protocolBodyPaths(path) {
 		triedBody[p] = struct{}{}
@@ -219,7 +217,7 @@ func extractAffinityValue(sources []config.ChannelAffinityKeySource, path string
 	for _, src := range sources {
 		switch strings.ToLower(strings.TrimSpace(src.Type)) {
 		case "request_header", "header":
-			if isSessionHeaderKey(src.Key) {
+			if isStickySessionHeader(src.Key) {
 				continue // already tried
 			}
 			if v, ok := extractHeader(headers, src.Key); ok {
@@ -233,6 +231,9 @@ func extractAffinityValue(sources []config.ChannelAffinityKeySource, path string
 				continue
 			}
 			if v, ok := extractGJSON(body, src.Path); ok {
+				if src.Path == "metadata.user_id" {
+					return normalizeClaudeUserID(v)
+				}
 				return v, true
 			}
 		}
@@ -245,33 +246,6 @@ func extractValue(sources []config.ChannelAffinityKeySource, headers http.Header
 	return extractAffinityValue(sources, "", headers, body)
 }
 
-func extractSessionHeader(headers http.Header) (string, bool) {
-	for _, k := range sessionHeaderKeys {
-		if v, ok := extractHeader(headers, k); ok {
-			return v, true
-		}
-	}
-	return "", false
-}
-
-var sessionHeaderKeys = []string{
-	"Session-Id", "session_id", "X-Session-Id", "x-session-id",
-	"Thread-Id", "thread_id", "X-Thread-Id",
-}
-
-func isSessionHeaderKey(key string) bool {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return false
-	}
-	for _, k := range sessionHeaderKeys {
-		if strings.EqualFold(k, key) {
-			return true
-		}
-	}
-	return false
-}
-
 // protocolBodyPaths returns body gjson paths preferred for the request path.
 // messages → Claude metadata.user_id; responses/chat → prompt_cache_key.
 func protocolBodyPaths(path string) []string {
@@ -282,7 +256,7 @@ func protocolBodyPaths(path string) []string {
 	case strings.Contains(p, "/responses"), strings.Contains(p, "/chat/completions"), strings.Contains(p, "/completions"):
 		return []string{"prompt_cache_key", "metadata.user_id"}
 	default:
-		// unknown path: try both, session already handled
+		// unknown path: try both, session headers already handled
 		return []string{"prompt_cache_key", "metadata.user_id"}
 	}
 }
