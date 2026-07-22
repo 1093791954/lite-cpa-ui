@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Mieluoxxx/lite-cpa/internal/registry"
@@ -73,6 +74,53 @@ func TestApplyProviderSpeed(t *testing.T) {
 			}
 			if tt.wantHeader != "" && gotKey.Headers["Anthropic-Beta"] != tt.wantHeader {
 				t.Fatalf("Anthropic-Beta = %q, want %q", gotKey.Headers["Anthropic-Beta"], tt.wantHeader)
+			}
+		})
+	}
+}
+
+func TestSemanticSSEError(t *testing.T) {
+	tests := []struct {
+		name  string
+		event [][]byte
+		want  string
+	}{
+		{
+			name: "error event with overload code",
+			event: [][]byte{
+				[]byte("event: error"),
+				[]byte(`data: {"error":{"code":"server_is_overloaded","message":"try again"}}`),
+			},
+			want: "server_is_overloaded",
+		},
+		{
+			name: "failed response event",
+			event: [][]byte{
+				[]byte("event: response.failed"),
+				[]byte(`data: {"type":"response.failed","response":{"error":{"code":"overloaded_error","message":"busy"}}}`),
+			},
+			want: "overloaded_error",
+		},
+		{
+			name: "normal response event",
+			event: [][]byte{
+				[]byte("event: response.created"),
+				[]byte(`data: {"type":"response.created","response":{"status":"in_progress"}}`),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := semanticSSEError(tt.event)
+			if tt.want == "" {
+				if got != "" {
+					t.Fatalf("semanticSSEError() = %q, want empty", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("semanticSSEError() = %q, want containing %q", got, tt.want)
 			}
 		})
 	}

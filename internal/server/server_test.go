@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Mieluoxxx/lite-cpa/internal/config"
+	"github.com/Mieluoxxx/lite-cpa/internal/reqlog"
 	"github.com/Mieluoxxx/lite-cpa/internal/server"
 	"github.com/Mieluoxxx/lite-cpa/internal/translator"
 	"github.com/tidwall/gjson"
@@ -623,6 +625,82 @@ func TestResponsesSameFormatStreamEventAssociation(t *testing.T) {
 		if strings.Count(body, "\n\n") < 2 {
 			t.Fatalf("expected multi-event SSE delimiters: %q", body)
 		}
+	}
+}
+
+func TestResponsesStreamOverloadRetriesAndLogsAttempt(t *testing.T) {
+	translator.RegisterBuiltin()
+	var badHits, goodHits int
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		badHits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: error\ndata: {\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"busy\"}}\n\n"))
+	}))
+	t.Cleanup(bad.Close)
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		goodHits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ok\",\"status\":\"completed\"}}\n\n"))
+	}))
+	t.Cleanup(good.Close)
+
+	logger, err := reqlog.Open(config.RequestLogConfig{
+		Enabled: true, Backend: "sqlite", Retention: "1h",
+		SQLite: config.SQLiteLogConfig{Path: filepath.Join(t.TempDir(), "requests.db")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+
+	port := freePort(t)
+	cfg := &config.Config{
+		Host: "127.0.0.1", Port: port, APIKeys: []string{"sk-test"}, RequestRetry: 1, MaxBodyBytes: 1 << 20,
+		OpenAIResponses: []config.Provider{
+			{Name: "overloaded", BaseURL: bad.URL + "/v1", APIKey: "sk-bad", Priority: 0, FailoverMode: "provider", Models: []config.ModelAlias{{Name: "gpt-5", Alias: "gpt-5"}}},
+			{Name: "healthy", BaseURL: good.URL + "/v1", APIKey: "sk-good", Priority: 1, FailoverMode: "provider", Models: []config.ModelAlias{{Name: "gpt-5", Alias: "gpt-5"}}},
+		},
+	}
+	srv := server.New(cfg, logger)
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	baseURL := "http://127.0.0.1:" + strconv.Itoa(port)
+	waitHTTP(t, baseURL+"/healthz")
+
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/v1/responses", strings.NewReader(`{"model":"gpt-5","input":"hi","stream":true}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), "response.completed") {
+		t.Fatalf("status %d body %s", resp.StatusCode, raw)
+	}
+	if badHits != 1 || goodHits != 1 {
+		t.Fatalf("upstream hits overloaded=%d healthy=%d, want 1 each", badHits, goodHits)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		logs, listErr := logger.List(t.Context(), reqlog.ListFilter{Limit: 10})
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		var sawOverload, sawSuccess bool
+		for _, record := range logs.Items {
+			sawOverload = sawOverload || (record.Upstream == "overloaded" && record.StatusCode == http.StatusServiceUnavailable && strings.Contains(record.Error, "server_is_overloaded"))
+			sawSuccess = sawSuccess || (record.Upstream == "healthy" && record.StatusCode == http.StatusOK)
+		}
+		if sawOverload && sawSuccess {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("missing overload or success records: %#v", logs.Items)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

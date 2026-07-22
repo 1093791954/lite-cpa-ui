@@ -13,6 +13,7 @@ import (
 	"github.com/Mieluoxxx/lite-cpa/internal/registry"
 	"github.com/Mieluoxxx/lite-cpa/internal/thinking"
 	"github.com/Mieluoxxx/lite-cpa/internal/translator"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
@@ -33,8 +34,9 @@ type StreamResult struct {
 }
 
 type StreamChunk struct {
-	Payload []byte
-	Err     error
+	Payload  []byte
+	Err      error
+	LogError string
 }
 
 type StatusError struct {
@@ -179,7 +181,7 @@ func executeOpenAIStream(ctx context.Context, key registry.UpstreamKey, from, to
 	}
 	// Same-format: forward upstream SSE verbatim so [DONE] and framing stay intact.
 	if from == to {
-		return streamPassthrough(ctx, resp), nil
+		return streamPassthrough(ctx, resp)
 	}
 	return streamSSE(ctx, resp, from, to, model, original, body), nil
 }
@@ -219,7 +221,7 @@ func executeResponsesStream(ctx context.Context, key registry.UpstreamKey, from,
 	}
 	// Same-format: preserve event:/data: association (do not reframe each line).
 	if from == to {
-		return streamPassthrough(ctx, resp), nil
+		return streamPassthrough(ctx, resp)
 	}
 	return streamSSE(ctx, resp, from, to, model, original, body), nil
 }
@@ -270,7 +272,7 @@ func executeClaudeStream(ctx context.Context, key registry.UpstreamKey, from, to
 		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
 	}
 	if from == to {
-		return streamPassthrough(ctx, resp), nil
+		return streamPassthrough(ctx, resp)
 	}
 	return streamSSE(ctx, resp, from, to, model, original, body), nil
 }
@@ -454,30 +456,99 @@ func frameForClient(chunk []byte, client translator.Format) []byte {
 	}
 }
 
-func streamPassthrough(ctx context.Context, resp *http.Response) *StreamResult {
+func streamPassthrough(ctx context.Context, resp *http.Response) (*StreamResult, error) {
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), streamScanMax)
+	first, done, err := readSSEEvent(scanner)
+	if err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
+	if errText := semanticSSEError(first); errText != "" {
+		resp.Body.Close()
+		return nil, StatusError{Code: http.StatusServiceUnavailable, Body: errText}
+	}
+
 	out := make(chan StreamChunk, 16)
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 0, 64*1024), streamScanMax)
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			// Forward each line; empty lines become "\n" which, after the previous
-			// line's trailing "\n", yields the SSE "\n\n" event delimiter.
-			payload := append(bytes.Clone(line), '\n')
-			select {
-			case out <- StreamChunk{Payload: payload}:
-			case <-ctx.Done():
+		emit := func(event [][]byte) bool {
+			logError := semanticSSEError(event)
+			for _, line := range event {
+				// Empty lines retain the SSE event delimiter.
+				payload := append(bytes.Clone(line), '\n')
+				chunk := StreamChunk{Payload: payload, LogError: logError}
+				logError = ""
+				select {
+				case out <- chunk:
+				case <-ctx.Done():
+					return false
+				}
+			}
+			return true
+		}
+
+		if !emit(first) {
+			return
+		}
+		for !done {
+			event, eventDone, scanErr := readSSEEvent(scanner)
+			if !emit(event) {
 				return
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			select {
-			case out <- StreamChunk{Err: err}:
-			case <-ctx.Done():
+			if scanErr != nil {
+				select {
+				case out <- StreamChunk{Err: scanErr}:
+				case <-ctx.Done():
+				}
+				return
 			}
+			done = eventDone
 		}
 	}()
-	return &StreamResult{Status: resp.StatusCode, Headers: resp.Header.Clone(), Chunks: out}
+	return &StreamResult{Status: resp.StatusCode, Headers: resp.Header.Clone(), Chunks: out}, nil
+}
+
+// readSSEEvent reads one complete SSE event while retaining each source line.
+func readSSEEvent(scanner *bufio.Scanner) (event [][]byte, done bool, err error) {
+	for scanner.Scan() {
+		line := bytes.Clone(scanner.Bytes())
+		event = append(event, line)
+		if len(bytes.TrimSpace(line)) == 0 {
+			return event, false, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return event, true, err
+	}
+	return event, true, nil
+}
+
+// semanticSSEError extracts an upstream error that arrived in an otherwise
+// successful HTTP SSE response. The original event remains available to the
+// client after response output has started; before then callers may fail over.
+func semanticSSEError(event [][]byte) string {
+	eventName := ""
+	data := ""
+	for _, line := range event {
+		trimmed := bytes.TrimSpace(line)
+		switch {
+		case bytes.HasPrefix(trimmed, []byte("event:")):
+			eventName = strings.TrimSpace(string(trimmed[len("event:"):]))
+		case bytes.HasPrefix(trimmed, []byte("data:")):
+			data = strings.TrimSpace(string(trimmed[len("data:"):]))
+		}
+	}
+	if eventName != "error" && eventName != "response.failed" {
+		parsed := gjson.Parse(data)
+		kind := parsed.Get("type").String()
+		if kind != "error" && kind != "response.failed" && parsed.Get("response.status").String() != "failed" {
+			return ""
+		}
+	}
+	if data != "" {
+		return data
+	}
+	return eventName
 }

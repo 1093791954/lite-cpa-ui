@@ -155,6 +155,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 		maxAttempts = 1
 	}
 	var lastErr error
+	lastErrLogged := false
 	var lastKey registry.UpstreamKey
 	for attempt := range maxAttempts {
 		var key registry.UpstreamKey
@@ -181,6 +182,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 			key, upstreamModel, pickErr = s.selector.Pick(resolveName, tried, preferSupplier, skipSuppliers)
 			if pickErr != nil {
 				lastErr = pickErr
+				lastErrLogged = false
 				break
 			}
 			if preferSupplier == "" {
@@ -195,9 +197,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 			upstreamModel = thinking.ParseSuffix(upstreamModel).ModelName + "(" + suffix + ")"
 		}
 
+		attemptStart := time.Now()
 		result, err := executor.Execute(r.Context(), key, upstreamModel, source, body, stream)
 		if err != nil {
 			lastErr = err
+			lastErrLogged = false
 			// Sticky key failed: drop pin so subsequent requests rebalance.
 			if aff.Matched && aff.CacheKey != "" && key.ID == aff.KeyID {
 				s.affinity.Clear(aff.CacheKey)
@@ -207,6 +211,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 			}
 			if se, ok := err.(executor.StatusError); ok {
 				if se.Code == 401 || se.Code == 403 || se.Code == 429 || se.Code >= 500 {
+					s.logReq(reqID, r, protocol, model, key.Provider, key.Name, se.Code, attemptStart, se.Error(), body, nil)
+					lastErrLogged = true
 					if s.cfg.Debug {
 						log.Printf("upstream %s/%s failed status=%d, rotating (mode=%s)", key.Name, key.ID, se.Code, key.FailoverMode)
 					}
@@ -229,6 +235,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 				s.logReq(reqID, r, protocol, model, key.Provider, key.Name, se.Code, start, se.Error(), body, []byte(se.Body))
 				return
 			}
+			s.logReq(reqID, r, protocol, model, key.Provider, key.Name, http.StatusBadGateway, attemptStart, err.Error(), body, nil)
+			lastErrLogged = true
 			if aff.Found && aff.SkipRetry && key.ID == aff.KeyID {
 				break
 			}
@@ -281,6 +289,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 					streamErr = chunk.Err.Error()
 					break
 				}
+				if chunk.LogError != "" && streamErr == "" {
+					streamErr = chunk.LogError
+				}
 				if len(chunk.Payload) == 0 {
 					continue
 				}
@@ -295,6 +306,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 			return
 		default:
 			lastErr = fmt.Errorf("unexpected executor result type %T", result)
+			lastErrLogged = false
 		}
 	}
 
@@ -303,7 +315,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(se.Code)
 			_, _ = w.Write([]byte(se.Body))
-			s.logReq(reqID, r, protocol, model, lastKey.Provider, lastKey.Name, se.Code, start, se.Error(), body, []byte(se.Body))
+			if !lastErrLogged {
+				s.logReq(reqID, r, protocol, model, lastKey.Provider, lastKey.Name, se.Code, start, se.Error(), body, []byte(se.Body))
+			}
 			return
 		}
 		msg := lastErr.Error()
@@ -312,7 +326,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, source tran
 			code = http.StatusNotFound
 		}
 		writeAPIError(w, code, "server_error", msg)
-		s.logReq(reqID, r, protocol, model, lastKey.Provider, lastKey.Name, code, start, msg, body, nil)
+		if !lastErrLogged {
+			s.logReq(reqID, r, protocol, model, lastKey.Provider, lastKey.Name, code, start, msg, body, nil)
+		}
 		return
 	}
 	writeAPIError(w, http.StatusBadGateway, "server_error", "all upstream credentials failed")
