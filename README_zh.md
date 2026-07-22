@@ -213,7 +213,7 @@ channel-affinity: [claude, gpt, grok]
 # channel-affinity: false
 ```
 
-亲和身份总表：`internal/affinity/cli_sessions.go`。优先级：CLI session 头（`X-Claude-Code-Session-Id`、`x-opencode-session`、`session-id`/`session_id`、`X-Session-Id`、`x-session-affinity`、`X-Client-Request-Id` …）→ 协议 body（`/v1/messages` 用归一化后的 `metadata.user_id`，`/v1/responses` 与 chat 用 `prompt_cache_key`）。优先 CLI：claude-code、codex、pi、oh-my-pi、opencode、kimi-code、mimo-code、zcode。没有身份字段 → 普通轮询。
+亲和身份总表：`internal/affinity/cli_sessions.go`。优先级：产品头（`X-Claude-Code-Session-Id`、`x-opencode-session`、`x-session-affinity`）→ Codex/Pi session/thread → `X-Session-Id` → `X-Client-Request-Id` → 协议 body（`/v1/messages` 归一化 `metadata.user_id`；responses/chat 用 `prompt_cache_key`）。详见 [渠道亲和与重试](docs/渠道亲和与重试.md)。无身份 → 普通轮询。
 
 ### 请求记录
 

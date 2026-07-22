@@ -122,6 +122,9 @@ Aliases accepted: `keys` → `key`; `supplier` / `site` → `provider`.
 
 Sticky routing pins a successful `UpstreamKey.ID` so the same session hits the same upstream key (prompt cache). Process-local memory only (no Redis).
 
+Deep dive: [docs/Channel-Affinity-and-Retry.md](docs/Channel-Affinity-and-Retry.md) · [docs/渠道亲和与重试.md](docs/渠道亲和与重试.md).
+Identity catalog (source of truth): `internal/affinity/cli_sessions.go`.
+
 **Defaults**
 
 - Enabled when omitted
@@ -147,19 +150,19 @@ channel-affinity:
   default-ttl-seconds: 600
 ```
 
-**Identity extraction order** (catalog: `internal/affinity/cli_sessions.go`)
+**Identity extraction** (runtime order)
 
-1. Sticky session headers (first non-empty), including:
-   - Claude Code: `X-Claude-Code-Session-Id`
-   - OpenCode: `x-opencode-session`, `x-session-affinity`, `X-Session-Id`
-   - Codex / Pi / oh-my-pi: `session-id` / `session_id`, `thread-id` / `thread_id`, `X-Client-Request-Id`
-   - Amp: `X-Amp-Thread-Id`
+1. Sticky session headers — first non-empty (`StickySessionHeaders`):
+   - Product: `X-Claude-Code-Session-Id`, `x-opencode-session`, `x-session-affinity` (MiMo / OpenCode / Pi)
+   - Codex / Pi: `session-id` / `session_id`, `thread-id` / `thread_id`, `Conversation_id`
+   - Generic: `X-Session-Id`; parent: `x-parent-session-id`; Amp: `X-Amp-Thread-Id`
+   - Weak / last: `X-Client-Request-Id` (Pi; Codex may be per-request)
 2. Protocol body by path:
    - `/v1/messages` → `metadata.user_id` (Claude/OpenCode formats normalized to session UUID) then `prompt_cache_key`
    - `/v1/responses` and chat completions → `prompt_cache_key` then `metadata.user_id`
-3. No identity field → no stickiness; normal round-robin
+3. No identity field → no stickiness; normal round-robin (no message-hash fallback)
 
-Priority CLIs covered in the catalog: claude-code, codex, pi, oh-my-pi, opencode, kimi-code, mimo-code, zcode.
+**CLI catalog** (what each client emits; see docs for full table): claude-code, codex, pi, oh-my-pi, opencode, **kimi-code** (body `prompt_cache_key`), **mimo-code** (header `x-session-affinity`), zcode.
 
 **Model family match:** substring, case-insensitive (e.g. `proxy-claude-x` matches `claude`).
 
@@ -330,7 +333,7 @@ Entrypoint: `lite-cpa --config /app/config.yaml`.
 
 - Preserve client body size limits if you raise `max-body-bytes`.
 - For streaming, disable response buffering (e.g. nginx `proxy_buffering off`).
-- Do not strip headers used for affinity: `session-id` / `session_id` / `X-Session-Id` / `Thread-Id` / `x-opencode-session` / `X-Claude-Code-Session-Id` / `X-Client-Request-Id` / `x-session-affinity` (nginx by default drops headers with underscores unless `underscores_in_headers on`).
+- Do not strip headers used for affinity: `X-Claude-Code-Session-Id`, `x-opencode-session`, `x-session-affinity`, `x-parent-session-id`, `session-id`/`session_id`, `thread-id`/`thread_id`, `Conversation_id`, `X-Session-Id`, `X-Client-Request-Id`, `X-Amp-Thread-Id` (nginx drops underscore headers unless `underscores_in_headers on`). See [docs/Channel-Affinity-and-Retry.md](docs/Channel-Affinity-and-Retry.md).
 
 ### Checklist
 

@@ -213,7 +213,7 @@ channel-affinity: [claude, gpt, grok]
 # channel-affinity: false
 ```
 
-Sticky identity catalog: `internal/affinity/cli_sessions.go`. First present wins: CLI session headers (`X-Claude-Code-Session-Id`, `x-opencode-session`, `session-id`/`session_id`, `X-Session-Id`, `x-session-affinity`, `X-Client-Request-Id`, …) → protocol body (`/v1/messages` uses normalized `metadata.user_id`, `/v1/responses` & chat use `prompt_cache_key`). Priority CLIs: claude-code, codex, pi, oh-my-pi, opencode, kimi-code, mimo-code, zcode. No identity field → normal round-robin.
+Sticky identity catalog: `internal/affinity/cli_sessions.go`. First present wins: product headers (`X-Claude-Code-Session-Id`, `x-opencode-session`, `x-session-affinity`) → Codex/Pi session/thread → `X-Session-Id` → `X-Client-Request-Id` → protocol body (`/v1/messages` normalizes `metadata.user_id`; responses/chat use `prompt_cache_key`). Details: [Channel Affinity and Retry](docs/Channel-Affinity-and-Retry.md). No identity → normal round-robin.
 
 ### Request log
 
