@@ -1,9 +1,11 @@
 package thinking
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 type ThinkingMode int
@@ -87,6 +89,8 @@ func HasLevel(levels []string, target string) bool {
 	return false
 }
 
+// MapToClaudeEffort maps a generic level to Claude adaptive effort.
+// xhigh and max stay distinct; max falls back to high when unsupported.
 func MapToClaudeEffort(level string, supportsMax bool) (string, bool) {
 	level = strings.ToLower(strings.TrimSpace(level))
 	switch level {
@@ -94,9 +98,9 @@ func MapToClaudeEffort(level string, supportsMax bool) (string, bool) {
 		return "", false
 	case "minimal":
 		return "low", true
-	case "low", "medium", "high":
+	case "low", "medium", "high", "xhigh":
 		return level, true
-	case "xhigh", "max":
+	case "max":
 		if supportsMax {
 			return "max", true
 		}
@@ -130,12 +134,119 @@ func GetThinkingText(part gjson.Result) string {
 	return ""
 }
 
-// ApplyThinking is a no-op for lite user-defined models.
-// Translators already map thinking fields between formats.
+// ApplyThinking applies model(suffix) thinking config, then Claude outbound guards.
+// Translators already map cross-format body fields; this only fills the suffix gap.
 func ApplyThinking(body []byte, model string, fromFormat, toFormat, providerKey string) ([]byte, error) {
-	_ = model
 	_ = fromFormat
-	_ = toFormat
 	_ = providerKey
+	to := strings.ToLower(strings.TrimSpace(toFormat))
+	if suffix := ParseSuffix(model); suffix.HasSuffix {
+		body = applySuffix(body, suffix.RawSuffix, to)
+	}
+	if to == "claude" {
+		body = sanitizeClaudeThinking(body)
+	}
 	return body, nil
+}
+
+func applySuffix(body []byte, raw, to string) []byte {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return body
+	}
+	switch to {
+	case "claude":
+		return applyClaudeSuffix(body, raw)
+	case "openai":
+		return applyOpenAISuffix(body, raw, "reasoning_effort")
+	case "openai-response":
+		return applyOpenAISuffix(body, raw, "reasoning.effort")
+	default:
+		return body
+	}
+}
+
+func applyClaudeSuffix(body []byte, raw string) []byte {
+	switch raw {
+	case "none":
+		return setClaudeDisabled(body)
+	case "auto":
+		body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+		body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+		return clearClaudeEffort(body)
+	case "minimal", "low", "medium", "high", "xhigh", "max":
+		effort, ok := MapToClaudeEffort(raw, true)
+		if !ok {
+			return body
+		}
+		body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+		body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+		body, _ = sjson.SetBytes(body, "output_config.effort", effort)
+		return body
+	}
+
+	budget, err := strconv.Atoi(raw)
+	if err != nil {
+		return body
+	}
+	switch {
+	case budget == 0:
+		return setClaudeDisabled(body)
+	case budget < 0:
+		body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+		body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+		return clearClaudeEffort(body)
+	default:
+		body, _ = sjson.SetBytes(body, "thinking.type", "enabled")
+		body, _ = sjson.SetBytes(body, "thinking.budget_tokens", budget)
+		return clearClaudeEffort(body)
+	}
+}
+
+func applyOpenAISuffix(body []byte, raw, path string) []byte {
+	switch raw {
+	case "none", "auto", "minimal", "low", "medium", "high", "xhigh", "max":
+		body, _ = sjson.SetBytes(body, path, raw)
+		return body
+	}
+	budget, err := strconv.Atoi(raw)
+	if err != nil {
+		return body
+	}
+	if level, ok := ConvertBudgetToLevel(budget); ok {
+		body, _ = sjson.SetBytes(body, path, level)
+	}
+	return body
+}
+
+func setClaudeDisabled(body []byte) []byte {
+	body, _ = sjson.SetBytes(body, "thinking.type", "disabled")
+	body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+	return clearClaudeEffort(body)
+}
+
+func clearClaudeEffort(body []byte) []byte {
+	body, _ = sjson.DeleteBytes(body, "output_config.effort")
+	if oc := gjson.GetBytes(body, "output_config"); oc.Exists() && oc.IsObject() && len(oc.Map()) == 0 {
+		body, _ = sjson.DeleteBytes(body, "output_config")
+	}
+	return body
+}
+
+// sanitizeClaudeThinking keeps Anthropic requests valid with adaptive/manual thinking.
+func sanitizeClaudeThinking(body []byte) []byte {
+	toolChoice := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "tool_choice.type").String()))
+	if toolChoice == "any" || toolChoice == "tool" {
+		body, _ = sjson.DeleteBytes(body, "thinking")
+		return clearClaudeEffort(body)
+	}
+
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
+	switch thinkingType {
+	case "enabled", "adaptive", "auto":
+		if temp := gjson.GetBytes(body, "temperature"); temp.Exists() && !(temp.Type == gjson.Number && temp.Float() == 1) {
+			body, _ = sjson.SetBytes(body, "temperature", 1)
+		}
+	}
+	return body
 }
