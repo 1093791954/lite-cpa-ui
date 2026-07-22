@@ -663,15 +663,20 @@
       $('btnTheme').title = dark ? '切换到日间' : '切换到夜间';
     }
 
-    function authHeaders() {
+    let apiKeyPrompt = null;
+
+    function currentApiKey() {
+      return localStorage.getItem(API_KEY) || '';
+    }
+
+    function authHeaders(key = currentApiKey()) {
       const h = {};
-      const key = localStorage.getItem(API_KEY) || '';
       if (key) h['Authorization'] = 'Bearer ' + key;
       return h;
     }
 
     function setApiKey(promptFirst) {
-      const cur = localStorage.getItem(API_KEY) || '';
+      const cur = currentApiKey();
       const key = prompt(promptFirst || 'Gateway API key (Bearer):', cur);
       if (key === null) return false;
       const trimmed = key.trim();
@@ -680,10 +685,21 @@
       return true;
     }
 
+    function requestApiKey(message) {
+      if (!apiKeyPrompt) {
+        apiKeyPrompt = Promise.resolve()
+          .then(() => setApiKey(message))
+          .finally(() => { apiKeyPrompt = null; });
+      }
+      return apiKeyPrompt;
+    }
+
     async function api(path) {
-      const res = await fetch(path, { headers: authHeaders() });
+      const key = currentApiKey();
+      const res = await fetch(path, { headers: authHeaders(key) });
       if (res.status === 401) {
-        if (setApiKey('Gateway API key (Bearer):')) return api(path);
+        if (currentApiKey() !== key) return api(path);
+        if (await requestApiKey('Gateway API key (Bearer):')) return api(path);
         throw new Error('unauthorized');
       }
       if (!res.ok) throw new Error(await res.text());
