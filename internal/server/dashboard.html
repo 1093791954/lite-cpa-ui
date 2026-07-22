@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>lite-cpa · Logs</title>
+  <style>
+    :root, [data-theme="light"] {
+      --bg0: #f2f4f8;
+      --bg1: #e8ecf4;
+      --bg2: #dde4f0;
+      --glass: rgba(255, 255, 255, 0.62);
+      --glass-strong: rgba(255, 255, 255, 0.78);
+      --glass-soft: rgba(255, 255, 255, 0.42);
+      --stroke: rgba(15, 23, 42, 0.08);
+      --stroke-strong: rgba(15, 23, 42, 0.12);
+      --text: #0f172a;
+      --text-secondary: #475569;
+      --muted: #94a3b8;
+      --ok: #16a34a;
+      --ok-soft: rgba(22, 163, 74, 0.12);
+      --err: #dc2626;
+      --err-soft: rgba(220, 38, 38, 0.12);
+      --warn: #d97706;
+      --warn-soft: rgba(217, 119, 6, 0.14);
+      --accent: #007aff;
+      --accent-soft: rgba(0, 122, 255, 0.12);
+      --shadow: 0 8px 32px rgba(15, 23, 42, 0.08), 0 1px 0 rgba(255, 255, 255, 0.6) inset;
+      --shadow-sm: 0 2px 12px rgba(15, 23, 42, 0.06);
+      --row-hover: rgba(0, 122, 255, 0.06);
+      --input-bg: rgba(255, 255, 255, 0.7);
+      --track: rgba(15, 23, 42, 0.06);
+      --bar: linear-gradient(90deg, #64b5ff, #007aff);
+      --blob-a: rgba(120, 180, 255, 0.45);
+      --blob-b: rgba(190, 160, 255, 0.35);
+      --blob-c: rgba(140, 220, 200, 0.3);
+      --dialog-bg: rgba(255, 255, 255, 0.86);
+      --pre-bg: rgba(15, 23, 42, 0.04);
+      --banner-bg: rgba(255, 196, 87, 0.22);
+      --banner-border: rgba(217, 119, 6, 0.28);
+      --banner-text: #92400e;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+              "Helvetica Neue", system-ui, sans-serif;
+    }
+
+    [data-theme="dark"] {
+      --bg0: #0b0f17;
+      --bg1: #121826;
+      --bg2: #1a2234;
+      --glass: rgba(28, 35, 52, 0.55);
+      --glass-strong: rgba(36, 44, 64, 0.72);
+      --glass-soft: rgba(28, 35, 52, 0.38);
+      --stroke: rgba(255, 255, 255, 0.08);
+      --stroke-strong: rgba(255, 255, 255, 0.12);
+      --text: #f1f5f9;
+      --text-secondary: #cbd5e1;
+      --muted: #94a3b8;
+      --ok: #34d399;
+      --ok-soft: rgba(52, 211, 153, 0.14);
+      --err: #f87171;
+      --err-soft: rgba(248, 113, 113, 0.14);
+      --warn: #fbbf24;
+      --warn-soft: rgba(251, 191, 36, 0.14);
+      --accent: #60a5fa;
+      --accent-soft: rgba(96, 165, 250, 0.16);
+      --shadow: 0 12px 40px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+      --shadow-sm: 0 2px 16px rgba(0, 0, 0, 0.28);
+      --row-hover: rgba(96, 165, 250, 0.08);
+      --input-bg: rgba(15, 20, 32, 0.55);
+      --track: rgba(255, 255, 255, 0.08);
+      --bar: linear-gradient(90deg, #3b82f6, #93c5fd);
+      --blob-a: rgba(59, 130, 246, 0.28);
+      --blob-b: rgba(139, 92, 246, 0.22);
+      --blob-c: rgba(45, 212, 191, 0.16);
+      --dialog-bg: rgba(22, 28, 42, 0.88);
+      --pre-bg: rgba(0, 0, 0, 0.28);
+      --banner-bg: rgba(251, 191, 36, 0.12);
+      --banner-border: rgba(251, 191, 36, 0.28);
+      --banner-text: #fde68a;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background: var(--bg0);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    /* Soft ambient blobs — frosted glass backdrop */
+    .ambient {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      overflow: hidden;
+      pointer-events: none;
+      background:
+        radial-gradient(1200px 700px at 10% -10%, var(--blob-a), transparent 55%),
+        radial-gradient(900px 600px at 90% 0%, var(--blob-b), transparent 50%),
+        radial-gradient(800px 500px at 50% 100%, var(--blob-c), transparent 55%),
+        linear-gradient(180deg, var(--bg0), var(--bg1) 55%, var(--bg2));
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 1.1rem 1.25rem 2.5rem;
+    }
+
+    /* Glass primitive */
+    .glass {
+      background: var(--glass);
+      border: 1px solid var(--stroke);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(28px) saturate(160%);
+      -webkit-backdrop-filter: blur(28px) saturate(160%);
+    }
+
+    header.appbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 1.1rem;
+      border-radius: 18px;
+      margin-bottom: 1rem;
+      position: sticky;
+      top: 0.75rem;
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      min-width: 0;
+    }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: linear-gradient(145deg, #5ac8fa, #007aff 55%, #5856d6);
+      box-shadow: 0 6px 16px rgba(0, 122, 255, 0.28);
+      flex: 0 0 auto;
+      position: relative;
+    }
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      inset: 8px;
+      border-radius: 4px;
+      border: 1.5px solid rgba(255, 255, 255, 0.85);
+      border-bottom-color: transparent;
+      border-left-color: transparent;
+      transform: rotate(45deg) translateY(1px);
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 1.02rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+    }
+    .brand .sub {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-family: var(--mono);
+      margin-top: 0.1rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .appbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-shrink: 0;
+    }
+
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 999px;
+      border: 1px solid var(--stroke);
+      background: var(--glass-soft);
+      color: var(--text-secondary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.15s ease, color 0.15s ease;
+      padding: 0;
+    }
+    .icon-btn:hover {
+      background: var(--glass-strong);
+      color: var(--text);
+    }
+    .icon-btn:active { transform: scale(0.96); }
+    .icon-btn svg { width: 18px; height: 18px; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 0.9rem;
+    }
+    @media (max-width: 820px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    .card {
+      border-radius: 18px;
+      padding: 1rem 1.05rem;
+      min-height: 92px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .card .label {
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .card .value {
+      font-size: 1.7rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.1;
+    }
+    .card .hint {
+      margin-top: 0.35rem;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+    .card.ok .value { color: var(--ok); }
+    .card.err .value { color: var(--err); }
+    .card.accent .value { color: var(--accent); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 0.9rem;
+      align-items: start;
+    }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      border-radius: 20px;
+      padding: 1rem;
+      min-width: 0;
+    }
+    .panel h2 {
+      margin: 0 0 0.85rem;
+      font-size: 0.78rem;
+      font-weight: 650;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .bars { display: flex; flex-direction: column; gap: 0.85rem; }
+    .bar-group .group-title {
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 0.45rem;
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.25rem 0.5rem;
+      font-size: 0.8rem;
+      margin-bottom: 0.45rem;
+    }
+    .bar-row .name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      color: var(--text);
+    }
+    .bar-row .count {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
+    .bar-track {
+      grid-column: 1 / -1;
+      height: 5px;
+      background: var(--track);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      background: var(--bar);
+      border-radius: 99px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.85rem;
+      align-items: center;
+    }
+
+    input, select, button.btn {
+      font: inherit;
+      font-size: 0.85rem;
+      border-radius: 12px;
+      border: 1px solid var(--stroke-strong);
+      background: var(--input-bg);
+      color: var(--text);
+      padding: 0.5rem 0.75rem;
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+    input::placeholder { color: var(--muted); }
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    input { min-width: 132px; }
+    select { min-width: 118px; cursor: pointer; }
+
+    button.btn {
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+      border-color: transparent;
+      font-weight: 600;
+      box-shadow: 0 6px 16px rgba(0, 122, 255, 0.22);
+    }
+    button.btn:hover { filter: brightness(1.05); }
+    button.btn:active { transform: scale(0.98); }
+    button.btn.ghost {
+      background: var(--glass-soft);
+      color: var(--text-secondary);
+      border: 1px solid var(--stroke-strong);
+      box-shadow: none;
+      font-weight: 500;
+    }
+    button.btn.ghost:hover {
+      color: var(--text);
+      background: var(--glass-strong);
+    }
+    button.btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+      filter: none;
+    }
+
+    label.chk {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--text-secondary);
+      font-size: 0.84rem;
+      user-select: none;
+      padding: 0.35rem 0.55rem;
+      border-radius: 999px;
+      background: var(--glass-soft);
+      border: 1px solid var(--stroke);
+    }
+    label.chk input { accent-color: var(--accent); }
+
+    .table-wrap {
+      overflow: auto;
+      border-radius: 14px;
+      border: 1px solid var(--stroke);
+      background: var(--glass-soft);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.65rem 0.7rem;
+      border-bottom: 1px solid var(--stroke);
+      vertical-align: middle;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 650;
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      position: sticky;
+      top: 0;
+      background: var(--glass-strong);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 1;
+    }
+    tbody tr { cursor: pointer; transition: background 0.12s ease; }
+    tbody tr:hover { background: var(--row-hover); }
+    tbody tr:last-child td { border-bottom: none; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2.4rem;
+      padding: 0.18rem 0.5rem;
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-weight: 650;
+      font-size: 0.75rem;
+    }
+    .pill.ok { color: var(--ok); background: var(--ok-soft); }
+    .pill.err { color: var(--err); background: var(--err-soft); }
+    .pill.warn { color: var(--warn); background: var(--warn-soft); }
+    .pill.neutral { color: var(--text-secondary); background: var(--track); }
+
+    .mono { font-family: var(--mono); }
+    .muted { color: var(--muted); }
+    .truncate {
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pager {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 0.85rem;
+      color: var(--muted);
+      font-size: 0.84rem;
+      gap: 0.75rem;
+    }
+    .pager .btns { display: flex; gap: 0.4rem; }
+
+    .banner {
+      background: var(--banner-bg);
+      border: 1px solid var(--banner-border);
+      color: var(--banner-text);
+      padding: 0.8rem 1rem;
+      border-radius: 16px;
+      margin-bottom: 0.9rem;
+      font-size: 0.9rem;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .banner code {
+      font-family: var(--mono);
+      font-size: 0.84em;
+      padding: 0.1rem 0.35rem;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.06);
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 2rem 0.5rem;
+      text-align: center;
+      font-size: 0.9rem;
+    }
+
+    dialog {
+      border: 1px solid var(--stroke);
+      border-radius: 22px;
+      background: var(--dialog-bg);
+      color: var(--text);
+      width: min(920px, 96vw);
+      max-height: 85vh;
+      padding: 0;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(30px) saturate(160%);
+      -webkit-backdrop-filter: blur(30px) saturate(160%);
+    }
+    dialog::backdrop {
+      background: rgba(15, 23, 42, 0.28);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    [data-theme="dark"] dialog::backdrop {
+      background: rgba(0, 0, 0, 0.5);
+    }
+    .dlg-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.95rem 1.1rem;
+      border-bottom: 1px solid var(--stroke);
+    }
+    .dlg-head strong {
+      font-size: 0.98rem;
+      letter-spacing: -0.01em;
+    }
+    .dlg-body {
+      padding: 1.05rem 1.1rem 1.25rem;
+      overflow: auto;
+      max-height: calc(85vh - 60px);
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      line-height: 1.5;
+      background: var(--pre-bg);
+      border: 1px solid var(--stroke);
+      border-radius: 12px;
+      padding: 0.85rem;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 0.4rem 0.75rem;
+      margin-bottom: 1rem;
+      font-size: 0.86rem;
+    }
+    .kv dt { color: var(--muted); font-weight: 500; }
+    .kv dd { margin: 0; font-family: var(--mono); word-break: break-all; }
+    .section-title {
+      font-size: 0.78rem;
+      font-weight: 650;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin: 0 0 0.45rem;
+    }
+    .section-title + pre + .section-title { margin-top: 0.95rem; }
+  </style>
+</head>
+<body>
+  <div class="ambient" aria-hidden="true"></div>
+  <div class="shell">
+    <header class="appbar glass">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <h1>lite-cpa · Logs</h1>
+          <div class="sub" id="statusLine">loading…</div>
+        </div>
+      </div>
+      <div class="appbar-actions">
+        <button type="button" class="icon-btn" id="btnTheme" title="切换昼夜" aria-label="切换昼夜主题">
+          <svg id="iconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" hidden>
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+          </svg>
+          <svg id="iconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5z"/>
+          </svg>
+        </button>
+        <button type="button" class="icon-btn" id="btnKey" title="设置 API Key" aria-label="设置 API Key">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <circle cx="8" cy="15" r="4"/>
+            <path d="M11.5 12.5 20 4M16 5l3 3"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="disabledBanner" class="banner" hidden>
+      request-log 未启用。在 config.yaml 设置 <code>request-log.enabled: true</code> 后重启。
+    </div>
+
+    <div class="cards" id="cards"></div>
+
+    <div class="layout">
+      <aside class="panel glass">
+        <h2>Breakdown</h2>
+        <div id="breakdown" class="bars"></div>
+      </aside>
+
+      <section class="panel glass">
+        <div class="toolbar">
+          <input id="fModel" placeholder="model" spellcheck="false" />
+          <input id="fUpstream" placeholder="upstream" spellcheck="false" />
+          <select id="fProtocol">
+            <option value="">protocol</option>
+            <option value="chat">chat</option>
+            <option value="responses">responses</option>
+            <option value="claude">claude</option>
+          </select>
+          <label class="chk"><input type="checkbox" id="fErrors" /> errors only</label>
+          <button type="button" class="btn" id="btnApply">Apply</button>
+          <button type="button" class="btn ghost" id="btnRefresh">Refresh</button>
+          <label class="chk"><input type="checkbox" id="autoRefresh" checked /> auto 5s</label>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Status</th>
+                <th>ms</th>
+                <th>Model</th>
+                <th>Upstream</th>
+                <th>Protocol</th>
+                <th>Path</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <div id="empty" class="empty" hidden>No requests yet.</div>
+        </div>
+
+        <div class="pager">
+          <span id="pageInfo">—</span>
+          <div class="btns">
+            <button type="button" class="btn ghost" id="btnPrev">Prev</button>
+            <button type="button" class="btn ghost" id="btnNext">Next</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <dialog id="detail">
+    <div class="dlg-head">
+      <strong>Request detail</strong>
+      <button type="button" class="btn ghost" id="btnClose">Close</button>
+    </div>
+    <div class="dlg-body" id="detailBody"></div>
+  </dialog>
+
+  <script>
+    const THEME_KEY = 'lite-cpa-theme';
+    const API_KEY = 'lite-cpa-api-key';
+    const state = { limit: 50, offset: 0, total: 0, items: [], timer: null };
+
+    const $ = (id) => document.getElementById(id);
+
+    function preferredTheme() {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved === 'light' || saved === 'dark') return saved;
+      return 'light';
+    }
+
+    function applyTheme(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem(THEME_KEY, theme);
+      const dark = theme === 'dark';
+      $('iconSun').hidden = !dark;
+      $('iconMoon').hidden = dark;
+      $('btnTheme').title = dark ? '切换到日间' : '切换到夜间';
+    }
+
+    function authHeaders() {
+      const h = {};
+      const key = localStorage.getItem(API_KEY) || '';
+      if (key) h['Authorization'] = 'Bearer ' + key;
+      return h;
+    }
+
+    function setApiKey(promptFirst) {
+      const cur = localStorage.getItem(API_KEY) || '';
+      const key = prompt(promptFirst || 'Gateway API key (Bearer):', cur);
+      if (key === null) return false;
+      const trimmed = key.trim();
+      if (trimmed) localStorage.setItem(API_KEY, trimmed);
+      else localStorage.removeItem(API_KEY);
+      return true;
+    }
+
+    async function api(path) {
+      const res = await fetch(path, { headers: authHeaders() });
+      if (res.status === 401) {
+        if (setApiKey('Gateway API key (Bearer):')) return api(path);
+        throw new Error('unauthorized');
+      }
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function statusClass(code) {
+      if (code >= 500) return 'err';
+      if (code >= 400) return 'warn';
+      if (code >= 200 && code < 300) return 'ok';
+      return 'neutral';
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      return d.toLocaleString();
+    }
+
+    function renderCards(st) {
+      const rate = st.total > 0 ? Math.round(((st.success || 0) / st.total) * 100) : 0;
+      const cards = [
+        { label: 'Total', value: st.total ?? 0, hint: 'all recorded requests' },
+        { label: 'Success', value: st.success ?? 0, cls: 'ok', hint: rate + '% success rate' },
+        { label: 'Errors', value: st.errors ?? 0, cls: 'err', hint: 'status ≥ 400 or error' },
+        { label: 'Avg ms', value: Math.round(st.avg_duration_ms || 0), cls: 'accent', hint: 'mean duration' },
+      ];
+      $('cards').innerHTML = cards.map(c =>
+        `<div class="card glass ${c.cls || ''}">
+          <div class="label">${c.label}</div>
+          <div>
+            <div class="value">${c.value}</div>
+            <div class="hint">${esc(c.hint || '')}</div>
+          </div>
+        </div>`
+      ).join('');
+    }
+
+    function renderBars(title, rows, max) {
+      if (!rows || !rows.length) return '';
+      const m = max || Math.max(...rows.map(r => r.count), 1);
+      const body = rows.map(r => {
+        const pct = Math.max(2, Math.round((r.count / m) * 100));
+        return `<div class="bar-row">
+          <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
+          <div class="count">${r.count}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+        </div>`;
+      }).join('');
+      return `<div class="bar-group"><div class="group-title">${esc(title)}</div>${body}</div>`;
+    }
+
+    function renderBreakdown(st) {
+      const max = Math.max(
+        ...(st.by_upstream || []).map(x => x.count),
+        ...(st.by_model || []).map(x => x.count),
+        ...(st.by_status || []).map(x => x.count),
+        1
+      );
+      $('breakdown').innerHTML = [
+        renderBars('Upstream', st.by_upstream, max),
+        renderBars('Model', st.by_model, max),
+        renderBars('Status', st.by_status, max),
+        renderBars('Protocol', st.by_protocol, max),
+      ].join('') || '<div class="empty">No data</div>';
+    }
+
+    function renderRows() {
+      const tbody = $('rows');
+      if (!state.items.length) {
+        tbody.innerHTML = '';
+        $('empty').hidden = false;
+      } else {
+        $('empty').hidden = true;
+        tbody.innerHTML = state.items.map((r, i) => {
+          const sc = statusClass(r.status_code);
+          return `<tr data-i="${i}">
+            <td class="mono muted">${esc(fmtTime(r.timestamp))}</td>
+            <td><span class="pill ${sc}">${esc(r.status_code)}</span></td>
+            <td class="mono">${esc(r.duration_ms)}</td>
+            <td class="mono truncate" title="${esc(r.model)}">${esc(r.model || '—')}</td>
+            <td class="mono truncate" title="${esc(r.upstream)}">${esc(r.upstream || '—')}</td>
+            <td class="mono">${esc(r.protocol || '—')}</td>
+            <td class="mono truncate" title="${esc(r.path)}">${esc(r.path)}</td>
+            <td class="truncate muted" title="${esc(r.error)}">${esc(r.error || '')}</td>
+          </tr>`;
+        }).join('');
+      }
+      const from = state.total === 0 ? 0 : state.offset + 1;
+      const to = Math.min(state.offset + state.items.length, state.total);
+      $('pageInfo').textContent = `${from}–${to} / ${state.total}`;
+      $('btnPrev').disabled = state.offset <= 0;
+      $('btnNext').disabled = state.offset + state.limit >= state.total;
+    }
+
+    function openDetail(r) {
+      const body = $('detailBody');
+      const hasBody = !!(r.req_body || r.resp_body);
+      body.innerHTML = `
+        <dl class="kv">
+          <dt>request_id</dt><dd>${esc(r.request_id)}</dd>
+          <dt>time</dt><dd>${esc(fmtTime(r.timestamp))}</dd>
+          <dt>status</dt><dd>${esc(r.status_code)} · ${esc(r.duration_ms)} ms</dd>
+          <dt>model</dt><dd>${esc(r.model)}</dd>
+          <dt>upstream</dt><dd>${esc(r.upstream)} (${esc(r.provider)})</dd>
+          <dt>protocol</dt><dd>${esc(r.protocol)}</dd>
+          <dt>path</dt><dd>${esc(r.method)} ${esc(r.path)}</dd>
+          <dt>user-agent</dt><dd>${esc(r.user_agent)}</dd>
+          <dt>error</dt><dd>${esc(r.error || '—')}</dd>
+        </dl>
+        ${hasBody ? `
+          <div class="section-title">Request body</div>
+          <pre>${esc(r.req_body || '(empty)')}</pre>
+          <div class="section-title">Response body</div>
+          <pre>${esc(r.resp_body || '(empty / stream omitted)')}</pre>
+        ` : `<p class="muted" style="font-size:0.85rem;margin:0">Bodies not stored (store-body: false).</p>`}
+      `;
+      $('detail').showModal();
+    }
+
+    function queryString() {
+      const p = new URLSearchParams();
+      p.set('limit', String(state.limit));
+      p.set('offset', String(state.offset));
+      const model = $('fModel').value.trim();
+      const upstream = $('fUpstream').value.trim();
+      const protocol = $('fProtocol').value;
+      if (model) p.set('model', model);
+      if (upstream) p.set('upstream', upstream);
+      if (protocol) p.set('protocol', protocol);
+      if ($('fErrors').checked) p.set('errors', '1');
+      return p.toString();
+    }
+
+    async function refresh() {
+      try {
+        const [st, list] = await Promise.all([
+          api('/api/logs/stats'),
+          api('/api/logs?' + queryString()),
+        ]);
+        $('disabledBanner').hidden = !!st.enabled;
+        $('statusLine').textContent = st.enabled
+          ? `enabled · total ${st.total} · ${new Date().toLocaleTimeString()}`
+          : `request-log disabled · ${new Date().toLocaleTimeString()}`;
+        renderCards(st);
+        renderBreakdown(st);
+        state.items = list.items || [];
+        state.total = list.total || 0;
+        state.limit = list.limit || state.limit;
+        state.offset = list.offset || 0;
+        renderRows();
+      } catch (e) {
+        $('statusLine').textContent = 'error: ' + e.message;
+      }
+    }
+
+    applyTheme(preferredTheme());
+
+    $('btnTheme').onclick = () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      applyTheme(next);
+    };
+    $('btnKey').onclick = () => {
+      if (setApiKey()) refresh();
+    };
+    $('rows').addEventListener('click', (ev) => {
+      const tr = ev.target.closest('tr[data-i]');
+      if (!tr) return;
+      const r = state.items[Number(tr.dataset.i)];
+      if (r) openDetail(r);
+    });
+    $('btnClose').onclick = () => $('detail').close();
+    $('detail').addEventListener('click', (ev) => {
+      if (ev.target === $('detail')) $('detail').close();
+    });
+    $('btnApply').onclick = () => { state.offset = 0; refresh(); };
+    $('btnRefresh').onclick = () => refresh();
+    $('btnPrev').onclick = () => {
+      state.offset = Math.max(0, state.offset - state.limit);
+      refresh();
+    };
+    $('btnNext').onclick = () => {
+      state.offset = state.offset + state.limit;
+      refresh();
+    };
+    $('autoRefresh').onchange = () => {
+      if (state.timer) clearInterval(state.timer);
+      if ($('autoRefresh').checked) state.timer = setInterval(refresh, 5000);
+    };
+    ['fModel', 'fUpstream'].forEach((id) => {
+      $(id).addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') { state.offset = 0; refresh(); }
+      });
+    });
+
+    refresh();
+    state.timer = setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

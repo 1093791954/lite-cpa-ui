@@ -50,7 +50,7 @@ func TestSQLiteRetentionNanoOrdering(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	base := time.Date(2026, 7, 21, 12, 0, 0, 100_000_000, time.UTC) // .1s
+	base := time.Date(2026, 7, 21, 12, 0, 0, 100_000_000, time.UTC)  // .1s
 	later := time.Date(2026, 7, 21, 12, 0, 0, 120_000_000, time.UTC) // .12s
 	// Lexical RFC3339Nano would put ".12" before ".1"; integer ns must not.
 	if err := store.Insert(context.Background(), Record{
@@ -136,5 +136,70 @@ CREATE TABLE request_logs (
 	}
 	if pathLeft != "/new" {
 		t.Fatalf("remaining path %q want /new", pathLeft)
+	}
+}
+
+func TestSQLiteListAndStats(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSQLite(filepath.Join(dir, "requests.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := time.Now().UTC()
+	rows := []Record{
+		{RequestID: "a", Timestamp: now.Add(-2 * time.Second), Method: "POST", Path: "/v1/messages", StatusCode: 200, Model: "claude-x", Protocol: "claude", Upstream: "anth", DurationMS: 10},
+		{RequestID: "b", Timestamp: now.Add(-1 * time.Second), Method: "POST", Path: "/v1/responses", StatusCode: 429, Model: "gpt-x", Protocol: "responses", Upstream: "laysath", DurationMS: 20, Error: "rate"},
+		{RequestID: "c", Timestamp: now, Method: "POST", Path: "/v1/chat/completions", StatusCode: 500, Model: "gpt-x", Protocol: "chat", Upstream: "laysath", DurationMS: 30, Error: "boom"},
+	}
+	for _, r := range rows {
+		if err := store.Insert(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	items, total, err := store.List(context.Background(), ListFilter{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 {
+		t.Fatalf("total %d want 3", total)
+	}
+	if len(items) != 2 {
+		t.Fatalf("page len %d want 2", len(items))
+	}
+	if items[0].RequestID != "c" || items[1].RequestID != "b" {
+		t.Fatalf("order got %q %q", items[0].RequestID, items[1].RequestID)
+	}
+
+	errItems, errTotal, err := store.List(context.Background(), ListFilter{ErrorsOnly: true, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errTotal != 2 || len(errItems) != 2 {
+		t.Fatalf("errors total=%d len=%d", errTotal, len(errItems))
+	}
+
+	modelItems, modelTotal, err := store.List(context.Background(), ListFilter{Model: "gpt-x", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelTotal != 2 || len(modelItems) != 2 {
+		t.Fatalf("model filter total=%d len=%d", modelTotal, len(modelItems))
+	}
+
+	st, err := store.Stats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Total != 3 || st.Errors != 2 || st.Success != 1 {
+		t.Fatalf("stats total=%d errors=%d success=%d", st.Total, st.Errors, st.Success)
+	}
+	if st.AvgDurationMS < 19 || st.AvgDurationMS > 21 {
+		t.Fatalf("avg duration %v", st.AvgDurationMS)
+	}
+	if len(st.ByUpstream) == 0 || st.ByUpstream[0].Name != "laysath" || st.ByUpstream[0].Count != 2 {
+		t.Fatalf("by_upstream %#v", st.ByUpstream)
 	}
 }

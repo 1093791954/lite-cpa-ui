@@ -119,9 +119,9 @@ CREATE TABLE request_logs_new (
 
 	for rows.Next() {
 		var (
-			id, status, duration                                                   int64
-			requestID, tsRaw, method, path, model, protocol, provider, upstream   string
-			userAgent, errText, reqBody, respBody                                 string
+			id, status, duration                                                int64
+			requestID, tsRaw, method, path, model, protocol, provider, upstream string
+			userAgent, errText, reqBody, respBody                               string
 		)
 		if err := rows.Scan(&id, &requestID, &tsRaw, &method, &path, &status, &model, &protocol, &provider, &upstream, &userAgent, &duration, &errText, &reqBody, &respBody); err != nil {
 			return fmt.Errorf("scan legacy row: %w", err)
@@ -246,4 +246,90 @@ func (s *SQLiteStore) DeleteOlderThan(ctx context.Context, cutoff time.Time) (in
 
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
+}
+
+func (s *SQLiteStore) List(ctx context.Context, f ListFilter) ([]Record, int64, error) {
+	f = normalizeListFilter(f)
+	where, args := buildListWhere(f, false)
+
+	var total int64
+	countQ := `SELECT COUNT(*) FROM request_logs` + where
+	if err := s.db.QueryRowContext(ctx, countQ, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	q := `SELECT id, request_id, ts, method, path, status_code, model, protocol, provider, upstream,
+  user_agent, duration_ms, error, req_body, resp_body
+FROM request_logs` + where + ` ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`
+	listArgs := append(append([]any{}, args...), f.Limit, f.Offset)
+	rows, err := s.db.QueryContext(ctx, q, listArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	items := make([]Record, 0, f.Limit)
+	for rows.Next() {
+		var r Record
+		var ts int64
+		if err := rows.Scan(
+			&r.ID, &r.RequestID, &ts, &r.Method, &r.Path, &r.StatusCode,
+			&r.Model, &r.Protocol, &r.Provider, &r.Upstream,
+			&r.UserAgent, &r.DurationMS, &r.Error, &r.ReqBody, &r.RespBody,
+		); err != nil {
+			return nil, 0, err
+		}
+		r.Timestamp = time.Unix(0, ts).UTC()
+		items = append(items, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
+func (s *SQLiteStore) Stats(ctx context.Context) (Stats, error) {
+	st := emptyStats()
+	row := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*),
+       COALESCE(SUM(CASE WHEN status_code >= 400 OR error != '' THEN 1 ELSE 0 END), 0),
+       COALESCE(AVG(duration_ms), 0)
+FROM request_logs`)
+	if err := row.Scan(&st.Total, &st.Errors, &st.AvgDurationMS); err != nil {
+		return Stats{}, err
+	}
+
+	var err error
+	if st.ByStatus, err = s.groupCount(ctx, `CAST(status_code AS TEXT)`); err != nil {
+		return Stats{}, err
+	}
+	if st.ByModel, err = s.groupCount(ctx, `CASE WHEN model = '' THEN '(empty)' ELSE model END`); err != nil {
+		return Stats{}, err
+	}
+	if st.ByUpstream, err = s.groupCount(ctx, `CASE WHEN upstream = '' THEN '(empty)' ELSE upstream END`); err != nil {
+		return Stats{}, err
+	}
+	if st.ByProtocol, err = s.groupCount(ctx, `CASE WHEN protocol = '' THEN '(empty)' ELSE protocol END`); err != nil {
+		return Stats{}, err
+	}
+	finalizeStats(&st)
+	return st, nil
+}
+
+func (s *SQLiteStore) groupCount(ctx context.Context, expr string) ([]NameCount, error) {
+	q := `SELECT ` + expr + ` AS name, COUNT(*) AS c FROM request_logs GROUP BY 1 ORDER BY c DESC, name ASC LIMIT 20`
+	rows, err := s.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]NameCount, 0, 8)
+	for rows.Next() {
+		var nc NameCount
+		if err := rows.Scan(&nc.Name, &nc.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, nc)
+	}
+	return out, rows.Err()
 }

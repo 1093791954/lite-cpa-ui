@@ -22,7 +22,9 @@ func New(keys []string) *Checker {
 
 func (c *Checker) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/" {
+		// Public: health, root, and the embedded monitor UI shells.
+		// /api/logs* still require a gateway key (browser prompts once).
+		if r.URL.Path == "/healthz" || r.URL.Path == "/" || r.URL.Path == "/dashboard" || r.URL.Path == "/dashboard.html" {
 			next.ServeHTTP(w, r)
 			return
 		}
