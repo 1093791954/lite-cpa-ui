@@ -27,16 +27,17 @@ type ThinkingSupport struct {
 
 // UpstreamKey is one credential that can serve a model.
 type UpstreamKey struct {
-	ID           string
-	Name         string // config provider name (profile id)
-	Provider     string // openai | openai-response | claude
-	BaseURL      string
-	APIKey       string
-	Priority     int
-	Speed        string // provider-controlled fast tier; empty blocks client-selected tiers
-	Headers      map[string]string
-	ProxyURL     string
-	FailoverMode string // key | provider (from provider config)
+	ID            string
+	Name          string // config provider name (profile id)
+	Provider      string // openai | openai-response | claude
+	BaseURL       string
+	APIKey        string
+	Priority      int    // provider-level priority (lower = higher); used across the merged model pool
+	EntryPriority int    // key-level priority within the same provider Name (lower = higher)
+	Speed         string // provider-controlled fast tier; empty blocks client-selected tiers
+	Headers       map[string]string
+	ProxyURL      string
+	FailoverMode  string // key | provider (from provider config)
 }
 
 type modelEntry struct {

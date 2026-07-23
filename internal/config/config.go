@@ -457,7 +457,8 @@ func normalizeProviderSpeeds(ps []Provider) {
 
 // ExpandKeys returns flat key entries for a provider (flat api-key or api-key-entries).
 // Proxy is provider-level only; flatProxy is applied by the pool when expanding UpstreamKey.
-func ExpandKeys(flatKey string, flatPriority int, entries []APIKeyEntry) []APIKeyEntry {
+// Entry Priority is relative within the provider (not global); flat api-key uses 0.
+func ExpandKeys(flatKey string, entries []APIKeyEntry) []APIKeyEntry {
 	if len(entries) > 0 {
 		out := make([]APIKeyEntry, 0, len(entries))
 		for _, e := range entries {
@@ -473,7 +474,7 @@ func ExpandKeys(flatKey string, flatPriority int, entries []APIKeyEntry) []APIKe
 	if flatKey == "" {
 		return nil
 	}
-	return []APIKeyEntry{{APIKey: flatKey, Priority: flatPriority}}
+	return []APIKeyEntry{{APIKey: flatKey, Priority: 0}}
 }
 
 func (m ModelAlias) ResolvedAlias() string {

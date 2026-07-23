@@ -209,7 +209,7 @@ After a retriable failure, behavior depends on the **failed key’s** provider:
   ...
 ```
 
-Same client model `alias` across providers is **merged** into one pool. Selection still prefers lower `priority`, then round-robin.
+Same client model `alias` across providers is **merged** into one pool. Selection prefers lower provider `priority`, then lower entry `priority` within that provider, then round-robin.
 
 ---
 

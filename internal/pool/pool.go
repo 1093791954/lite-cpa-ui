@@ -71,7 +71,7 @@ func providerName(name, fallbackPrefix string, index int) string {
 func expandProvider(provider, name, baseURL, flatKey, flatProxy string, flatPriority int, headers map[string]string, speed string, entries []config.APIKeyEntry, globalProxy, failoverMode string) []registry.UpstreamKey {
 	baseURL = trimSlash(baseURL)
 	failoverMode = config.NormalizeFailoverMode(failoverMode)
-	expanded := config.ExpandKeys(flatKey, flatPriority, entries)
+	expanded := config.ExpandKeys(flatKey, entries)
 	out := make([]registry.UpstreamKey, 0, len(expanded))
 	// proxy is provider-level (flatProxy), then global fallback
 	proxy := flatProxy
@@ -79,25 +79,22 @@ func expandProvider(provider, name, baseURL, flatKey, flatProxy string, flatPrio
 		proxy = globalProxy
 	}
 	for i, e := range expanded {
-		priority := e.Priority
-		if priority == 0 {
-			priority = flatPriority
-		}
 		h := map[string]string{}
 		for k, v := range headers {
 			h[k] = v
 		}
 		out = append(out, registry.UpstreamKey{
-			ID:           fmt.Sprintf("%s-%d", name, i),
-			Name:         name,
-			Provider:     provider,
-			BaseURL:      baseURL,
-			APIKey:       e.APIKey,
-			Priority:     priority,
-			Speed:        speed,
-			Headers:      h,
-			ProxyURL:     proxy,
-			FailoverMode: failoverMode,
+			ID:            fmt.Sprintf("%s-%d", name, i),
+			Name:          name,
+			Provider:      provider,
+			BaseURL:       baseURL,
+			APIKey:        e.APIKey,
+			Priority:      flatPriority,
+			EntryPriority: e.Priority,
+			Speed:         speed,
+			Headers:       h,
+			ProxyURL:      proxy,
+			FailoverMode:  failoverMode,
 		})
 	}
 	return out
@@ -146,6 +143,8 @@ func NewSelector(reg *registry.Registry, retry int) *Selector {
 // Pick chooses the next unused key for model.
 // preferSupplier (if non-empty) prefers remaining keys from that provider Name first.
 // skipSuppliers excludes all keys under those provider Names (dead relay).
+// Selection order: lower provider Priority first, then lower EntryPriority within the same
+// provider tier, then round-robin order among ties.
 func (s *Selector) Pick(model string, tried map[string]struct{}, preferSupplier string, skipSuppliers map[string]struct{}) (registry.UpstreamKey, string, error) {
 	_, keys, ok := s.reg.Resolve(model)
 	if !ok || len(keys) == 0 {
@@ -153,13 +152,14 @@ func (s *Selector) Pick(model string, tried map[string]struct{}, preferSupplier 
 	}
 	start := s.nextIndex(model, len(keys))
 	ordered := make([]registry.UpstreamKey, 0, len(keys))
-	for i := 0; i < len(keys); i++ {
+	for i := range len(keys) {
 		ordered = append(ordered, keys[(start+i)%len(keys)])
 	}
 
 	tryPick := func(restrictSupplier string) (registry.UpstreamKey, bool) {
 		var best *registry.UpstreamKey
 		bestPri := int(^uint(0) >> 1)
+		bestEntryPri := int(^uint(0) >> 1)
 		for _, k := range ordered {
 			if tried != nil {
 				if _, used := tried[k.ID]; used {
@@ -174,10 +174,11 @@ func (s *Selector) Pick(model string, tried map[string]struct{}, preferSupplier 
 					continue
 				}
 			}
-			if k.Priority < bestPri {
+			if best == nil || k.Priority < bestPri || (k.Priority == bestPri && k.EntryPriority < bestEntryPri) {
 				cp := k
 				best = &cp
 				bestPri = k.Priority
+				bestEntryPri = k.EntryPriority
 			}
 		}
 		if best == nil {

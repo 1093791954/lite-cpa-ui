@@ -92,18 +92,19 @@ Three lists (same `Provider` shape):
 |---|---|---|
 | `name` | provider | Stable id. Failover unit when `failover-mode: provider`. |
 | `proxy-url` | provider only | Outbound proxy for **all** keys under this name. Not per-key. Empty → global `proxy-url` → env. |
-| `priority` | provider / entry | Lower number = higher priority. |
+| `priority` | provider | Cross-provider rank in a merged model pool. Lower number = higher priority. |
 | `failover-mode` | provider | `key` (default) or `provider`. See [Failover](#failover). |
 | `headers` | provider | Extra upstream headers. `User-Agent` recommended; unset → Go default `Go-http-client/1.1`. |
 | `speed` | provider | Optional `fast` only. Administrator-controlled: Anthropic sends `speed: "fast"` plus `fast-mode-2026-02-01`; OpenAI sends `service_tier: "priority"`. When absent, client-selected fast tiers are removed. Configure only for upstreams that support their native tier. |
 | `base-url` | provider | Upstream base (no trailing slash required). |
 | `api-key` | provider | Single key. Ignored if `api-key-entries` is non-empty. |
-| `api-key-entries[]` | provider | Multi-key pool: `api-key`, optional `priority`. |
+| `api-key-entries[]` | provider | Multi-key pool: `api-key`, optional `priority` (provider-internal only). |
+| `api-key-entries[].priority` | entry | Rank **inside** this provider only. Lower number = preferred among this provider's keys. Does not outrank another provider. |
 | `models[]` | provider | `name` = upstream model id; `alias` = client-visible id (defaults to `name`). |
 
 #### Multi-provider same model
 
-If two providers register the **same client `alias`**, keys are **merged** into one pool. Selection uses priority + round-robin; failover uses each key’s provider `name` + `failover-mode`.
+If two providers register the **same client `alias`**, keys are **merged** into one pool. Selection uses provider `priority`, then entry `priority` within a provider, then round-robin; failover uses each key’s provider `name` + `failover-mode`.
 
 ### Failover
 
