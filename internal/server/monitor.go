@@ -1,38 +1,44 @@
 package server
 
 import (
-	_ "embed"
+	"embed"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/Mieluoxxx/lite-cpa/internal/reqlog"
 )
 
-//go:embed dashboard.html
-var dashboardHTML []byte
-
-//go:embed pico.classless.min.css
-var picoClasslessCSS []byte
+//go:embed dashboard
+var dashboardFiles embed.FS
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	index, err := dashboardFiles.ReadFile("dashboard/index.html")
+	if err != nil {
+		http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(dashboardHTML)
+	_, _ = w.Write(index)
 }
 
-func (s *Server) handlePicoClasslessCSS(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDashboardAsset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	if r.URL.Path == "/dashboard/" {
+		s.handleDashboard(w, r)
+		return
+	}
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	_, _ = w.Write(picoClasslessCSS)
+	http.FileServerFS(dashboardFiles).ServeHTTP(w, r)
 }
 
 func (s *Server) handleLogsStats(w http.ResponseWriter, r *http.Request) {
@@ -40,7 +46,7 @@ func (s *Server) handleLogsStats(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
 		return
 	}
-	st, err := s.logger.Stats(r.Context())
+	st, err := s.logger.Stats(r.Context(), logListFilter(r.URL.Query()))
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", err.Error())
 		return
@@ -54,12 +60,7 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	f := reqlog.ListFilter{
-		Model:      strings.TrimSpace(q.Get("model")),
-		Upstream:   strings.TrimSpace(q.Get("upstream")),
-		Protocol:   strings.TrimSpace(q.Get("protocol")),
-		ErrorsOnly: truthy(q.Get("errors")),
-	}
+	f := logListFilter(q)
 	if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			f.Limit = n
@@ -89,6 +90,15 @@ func (s *Server) handleLogsClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"deleted": deleted})
+}
+
+func logListFilter(q url.Values) reqlog.ListFilter {
+	return reqlog.ListFilter{
+		Model:      strings.TrimSpace(q.Get("model")),
+		Upstream:   strings.TrimSpace(q.Get("upstream")),
+		Protocol:   strings.TrimSpace(q.Get("protocol")),
+		ErrorsOnly: truthy(q.Get("errors")),
+	}
 }
 
 func truthy(v string) bool {

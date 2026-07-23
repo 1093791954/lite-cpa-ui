@@ -34,7 +34,7 @@ type Store interface {
 	Clear(ctx context.Context) (int64, error)
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 	List(ctx context.Context, f ListFilter) ([]Record, int64, error)
-	Stats(ctx context.Context) (Stats, error)
+	Stats(ctx context.Context, f ListFilter) (Stats, error)
 	Close() error
 }
 
@@ -47,5 +47,5 @@ func (Noop) DeleteOlderThan(context.Context, time.Time) (int64, error) { return 
 func (Noop) List(context.Context, ListFilter) ([]Record, int64, error) {
 	return []Record{}, 0, nil
 }
-func (Noop) Stats(context.Context) (Stats, error) { return emptyStats(), nil }
-func (Noop) Close() error                         { return nil }
+func (Noop) Stats(context.Context, ListFilter) (Stats, error) { return emptyStats(), nil }
+func (Noop) Close() error                                     { return nil }

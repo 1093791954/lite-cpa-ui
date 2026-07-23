@@ -86,14 +86,14 @@ func (l *Logger) Clear(ctx context.Context) (int64, error) {
 	return l.store.Clear(ctx)
 }
 
-// Stats returns aggregate metrics when logging is enabled.
-func (l *Logger) Stats(ctx context.Context) (Stats, error) {
+// Stats returns aggregate metrics for the supplied request-log filter.
+func (l *Logger) Stats(ctx context.Context, f ListFilter) (Stats, error) {
 	if l == nil || !l.Enabled() {
 		st := emptyStats()
 		st.Enabled = false
 		return st, nil
 	}
-	st, err := l.store.Stats(ctx)
+	st, err := l.store.Stats(ctx, f)
 	if err != nil {
 		return Stats{}, err
 	}

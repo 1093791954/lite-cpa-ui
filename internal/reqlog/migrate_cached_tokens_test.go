@@ -72,7 +72,7 @@ func TestOpenMigratesCachedTokens(t *testing.T) {
 	if !cols["cached_tokens"] {
 		t.Fatalf("missing cached_tokens: %#v", cols)
 	}
-	st, err := store.Stats(context.Background())
+	st, err := store.Stats(context.Background(), reqlog.ListFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}

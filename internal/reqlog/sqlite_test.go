@@ -200,7 +200,7 @@ func TestSQLiteListAndStats(t *testing.T) {
 		t.Fatalf("model filter total=%d len=%d", modelTotal, len(modelItems))
 	}
 
-	st, err := store.Stats(context.Background())
+	st, err := store.Stats(context.Background(), ListFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +218,23 @@ func TestSQLiteListAndStats(t *testing.T) {
 	}
 	if len(st.ByUpstream) == 0 || st.ByUpstream[0].Name != "laysath" || st.ByUpstream[0].Count != 2 {
 		t.Fatalf("by_upstream %#v", st.ByUpstream)
+	}
+
+	filteredStats, err := store.Stats(context.Background(), ListFilter{Model: "gpt-x", Upstream: "laysath"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filteredStats.Total != 2 || filteredStats.Errors != 2 || filteredStats.Success != 0 {
+		t.Fatalf("filtered stats total=%d errors=%d success=%d", filteredStats.Total, filteredStats.Errors, filteredStats.Success)
+	}
+	if filteredStats.InputTokens != 200 || filteredStats.OutputTokens != 20 || filteredStats.CachedTokens != 50 {
+		t.Fatalf("filtered token stats input=%d output=%d cached=%d", filteredStats.InputTokens, filteredStats.OutputTokens, filteredStats.CachedTokens)
+	}
+	if len(filteredStats.ByModel) != 1 || filteredStats.ByModel[0] != (NameCount{Name: "gpt-x", Count: 2}) {
+		t.Fatalf("filtered by_model %#v", filteredStats.ByModel)
+	}
+	if len(filteredStats.ByUpstream) != 1 || filteredStats.ByUpstream[0] != (NameCount{Name: "laysath", Count: 2}) {
+		t.Fatalf("filtered by_upstream %#v", filteredStats.ByUpstream)
 	}
 
 	deleted, err := store.Clear(context.Background())

@@ -158,8 +158,9 @@ FROM request_logs%s ORDER BY ts DESC, id DESC LIMIT $%d OFFSET $%d`, where, limi
 	return items, total, nil
 }
 
-func (s *PostgresStore) Stats(ctx context.Context) (Stats, error) {
+func (s *PostgresStore) Stats(ctx context.Context, f ListFilter) (Stats, error) {
 	st := emptyStats()
+	where, args := buildListWhere(f, true)
 	row := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*),
        COALESCE(SUM(CASE WHEN status_code >= 400 OR error <> '' THEN 1 ELSE 0 END), 0),
@@ -168,7 +169,7 @@ SELECT COUNT(*),
        COALESCE(SUM(output_tokens), 0),
        COALESCE(SUM(cached_tokens), 0),
        COALESCE(SUM(CASE WHEN duration_ms > 0 THEN duration_ms ELSE 0 END), 0)
-FROM request_logs`)
+FROM request_logs`+where, args...)
 	var totalDurationMS int64
 	if err := row.Scan(&st.Total, &st.Errors, &st.AvgDurationMS, &st.InputTokens, &st.OutputTokens, &st.CachedTokens, &totalDurationMS); err != nil {
 		return Stats{}, err
@@ -178,25 +179,25 @@ FROM request_logs`)
 	}
 
 	var err error
-	if st.ByStatus, err = s.groupCount(ctx, `status_code::text`); err != nil {
+	if st.ByStatus, err = s.groupCount(ctx, `status_code::text`, where, args); err != nil {
 		return Stats{}, err
 	}
-	if st.ByModel, err = s.groupCount(ctx, `CASE WHEN model = '' THEN '(empty)' ELSE model END`); err != nil {
+	if st.ByModel, err = s.groupCount(ctx, `CASE WHEN model = '' THEN '(empty)' ELSE model END`, where, args); err != nil {
 		return Stats{}, err
 	}
-	if st.ByUpstream, err = s.groupCount(ctx, `CASE WHEN upstream = '' THEN '(empty)' ELSE upstream END`); err != nil {
+	if st.ByUpstream, err = s.groupCount(ctx, `CASE WHEN upstream = '' THEN '(empty)' ELSE upstream END`, where, args); err != nil {
 		return Stats{}, err
 	}
-	if st.ByProtocol, err = s.groupCount(ctx, `CASE WHEN protocol = '' THEN '(empty)' ELSE protocol END`); err != nil {
+	if st.ByProtocol, err = s.groupCount(ctx, `CASE WHEN protocol = '' THEN '(empty)' ELSE protocol END`, where, args); err != nil {
 		return Stats{}, err
 	}
 	finalizeStats(&st)
 	return st, nil
 }
 
-func (s *PostgresStore) groupCount(ctx context.Context, expr string) ([]NameCount, error) {
-	q := `SELECT ` + expr + ` AS name, COUNT(*) AS c FROM request_logs GROUP BY 1 ORDER BY c DESC, name ASC LIMIT 20`
-	rows, err := s.db.QueryContext(ctx, q)
+func (s *PostgresStore) groupCount(ctx context.Context, expr, where string, args []any) ([]NameCount, error) {
+	q := `SELECT ` + expr + ` AS name, COUNT(*) AS c FROM request_logs` + where + ` GROUP BY 1 ORDER BY c DESC, name ASC LIMIT 20`
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

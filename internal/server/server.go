@@ -52,7 +52,7 @@ func New(cfg *config.Config, logger *reqlog.Logger) *Server {
 	mux.HandleFunc("GET /", s.handleRoot)
 	mux.HandleFunc("GET /dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /dashboard.html", s.handleDashboard)
-	mux.HandleFunc("GET /assets/pico-2.1.1.classless.min.css", s.handlePicoClasslessCSS)
+	mux.HandleFunc("GET /dashboard/", s.handleDashboardAsset)
 	mux.HandleFunc("GET /api/logs", s.handleLogsList)
 	mux.HandleFunc("DELETE /api/logs", s.handleLogsClear)
 	mux.HandleFunc("GET /api/logs/stats", s.handleLogsStats)

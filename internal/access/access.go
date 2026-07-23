@@ -24,7 +24,7 @@ func (c *Checker) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Public: health, root, and embedded monitor assets. /api/logs* still
 		// require a gateway key (the browser prompts once and stores it locally).
-		if r.URL.Path == "/healthz" || r.URL.Path == "/" || r.URL.Path == "/dashboard" || r.URL.Path == "/dashboard.html" || r.URL.Path == "/assets/pico-2.1.1.classless.min.css" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/" || r.URL.Path == "/dashboard" || r.URL.Path == "/dashboard.html" || strings.HasPrefix(r.URL.Path, "/dashboard/") {
 			next.ServeHTTP(w, r)
 			return
 		}
