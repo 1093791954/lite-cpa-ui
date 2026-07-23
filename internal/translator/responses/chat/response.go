@@ -22,6 +22,7 @@ type responsesToChatState struct {
 	ToolOrder        []string // primary chat tool-call ids
 	FinishReason     string
 	PromptTokens     int64
+	CachedTokens     int64
 	CompletionTokens int64
 	TotalTokens      int64
 }
@@ -210,6 +211,7 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletions(ctx context.Context, 
 	case "response.completed", "response.incomplete":
 		if usage := root.Get("response.usage"); usage.Exists() {
 			st.PromptTokens = usage.Get("input_tokens").Int()
+			st.CachedTokens = usage.Get("input_tokens_details.cached_tokens").Int()
 			st.CompletionTokens = usage.Get("output_tokens").Int()
 			st.TotalTokens = usage.Get("total_tokens").Int()
 		}
@@ -228,6 +230,7 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletions(ctx context.Context, 
 			usageChunk, _ = sjson.SetBytes(usageChunk, "created", st.Created)
 			usageChunk, _ = sjson.SetBytes(usageChunk, "model", firstNonEmpty(st.Model, modelName))
 			usageChunk, _ = sjson.SetBytes(usageChunk, "usage.prompt_tokens", st.PromptTokens)
+			usageChunk, _ = sjson.SetBytes(usageChunk, "usage.prompt_tokens_details.cached_tokens", st.CachedTokens)
 			usageChunk, _ = sjson.SetBytes(usageChunk, "usage.completion_tokens", st.CompletionTokens)
 			usageChunk, _ = sjson.SetBytes(usageChunk, "usage.total_tokens", st.TotalTokens)
 			out = append(out, append([]byte("data: "), usageChunk...))
@@ -328,6 +331,7 @@ func responsesObjectToChatCompletion(root gjson.Result, modelName string) []byte
 	}
 	if usage := root.Get("usage"); usage.Exists() {
 		out, _ = sjson.SetBytes(out, "usage.prompt_tokens", usage.Get("input_tokens").Int())
+		out, _ = sjson.SetBytes(out, "usage.prompt_tokens_details.cached_tokens", usage.Get("input_tokens_details.cached_tokens").Int())
 		out, _ = sjson.SetBytes(out, "usage.completion_tokens", usage.Get("output_tokens").Int())
 		out, _ = sjson.SetBytes(out, "usage.total_tokens", usage.Get("total_tokens").Int())
 	}

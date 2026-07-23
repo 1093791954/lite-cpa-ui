@@ -61,7 +61,7 @@ func TestResponsesIdentity(t *testing.T) {
 }
 
 func TestResponsesToChatNonStream(t *testing.T) {
-	resp := []byte(`{"id":"resp_1","object":"response","model":"gpt-5","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`)
+	resp := []byte(`{"id":"resp_1","object":"response","model":"gpt-5","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":1},"output_tokens":2,"total_tokens":3}}`)
 	out := translator.TranslateNonStream(context.Background(), translator.FormatOpenAIResponse, translator.FormatOpenAI, "gpt-5", nil, nil, resp, new(any))
 	if gjson.GetBytes(out, "object").String() != "chat.completion" {
 		t.Fatalf("object: %s", out)
@@ -69,6 +69,33 @@ func TestResponsesToChatNonStream(t *testing.T) {
 	if gjson.GetBytes(out, "choices.0.message.content").String() != "hello" {
 		t.Fatalf("content: %s", out)
 	}
+	if got := gjson.GetBytes(out, "usage.prompt_tokens_details.cached_tokens").Int(); got != 1 {
+		t.Fatalf("cached tokens: got %d want 1: %s", got, out)
+	}
+}
+
+func TestResponsesToChatStreamPreservesCachedTokens(t *testing.T) {
+	var param any
+	chunks := translator.TranslateStream(
+		context.Background(),
+		translator.FormatOpenAIResponse,
+		translator.FormatOpenAI,
+		"gpt-5",
+		nil,
+		nil,
+		[]byte(`{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":900},"output_tokens":10,"total_tokens":1010}}}`),
+		&param,
+	)
+	for _, chunk := range chunks {
+		payload := bytes.TrimSpace(bytes.TrimPrefix(chunk, []byte("data:")))
+		if usage := gjson.GetBytes(payload, "usage"); usage.Exists() {
+			if got := usage.Get("prompt_tokens_details.cached_tokens").Int(); got != 900 {
+				t.Fatalf("cached tokens: got %d want 900: %s", got, payload)
+			}
+			return
+		}
+	}
+	t.Fatal("usage chunk missing")
 }
 
 // Official Responses streams key function_call by call_id on output_item.added,
