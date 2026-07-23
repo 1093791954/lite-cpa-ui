@@ -54,6 +54,7 @@ func New(cfg *config.Config, logger *reqlog.Logger) *Server {
 	mux.HandleFunc("GET /dashboard.html", s.handleDashboard)
 	mux.HandleFunc("GET /assets/pico-2.1.1.classless.min.css", s.handlePicoClasslessCSS)
 	mux.HandleFunc("GET /api/logs", s.handleLogsList)
+	mux.HandleFunc("DELETE /api/logs", s.handleLogsClear)
 	mux.HandleFunc("GET /api/logs/stats", s.handleLogsStats)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
@@ -89,7 +90,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"name":"lite-cpa","endpoints":["GET /dashboard","GET /dashboard.html","GET /api/logs","GET /api/logs/stats","GET /v1/models","POST /v1/chat/completions","POST /v1/responses","POST /v1/messages"]}`))
+	_, _ = w.Write([]byte(`{"name":"lite-cpa","endpoints":["GET /dashboard","GET /dashboard.html","GET /api/logs","DELETE /api/logs","GET /api/logs/stats","GET /v1/models","POST /v1/chat/completions","POST /v1/responses","POST /v1/messages"]}`))
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {

@@ -105,6 +105,14 @@ func (s *PostgresStore) DeleteOlderThan(ctx context.Context, cutoff time.Time) (
 	return res.RowsAffected()
 }
 
+func (s *PostgresStore) Clear(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM request_logs`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *PostgresStore) Close() error {
 	return s.db.Close()
 }

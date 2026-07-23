@@ -19,6 +19,14 @@ func TestSQLiteInsertAndRetention(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
+	var journalMode string
+	if err := store.db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+		t.Fatal(err)
+	}
+	if journalMode != "delete" {
+		t.Fatalf("journal mode %q want delete", journalMode)
+	}
+
 	now := time.Now().UTC()
 	if err := store.Insert(context.Background(), Record{
 		RequestID: "r1", Timestamp: now.Add(-48 * time.Hour), Method: "POST", Path: "/v1/chat/completions",
@@ -210,5 +218,20 @@ func TestSQLiteListAndStats(t *testing.T) {
 	}
 	if len(st.ByUpstream) == 0 || st.ByUpstream[0].Name != "laysath" || st.ByUpstream[0].Count != 2 {
 		t.Fatalf("by_upstream %#v", st.ByUpstream)
+	}
+
+	deleted, err := store.Clear(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 3 {
+		t.Fatalf("cleared %d want 3", deleted)
+	}
+	clearedItems, clearedTotal, err := store.List(context.Background(), ListFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clearedTotal != 0 || len(clearedItems) != 0 {
+		t.Fatalf("after clear total=%d len=%d", clearedTotal, len(clearedItems))
 	}
 }

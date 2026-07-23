@@ -31,6 +31,7 @@ type Record struct {
 // Store persists request records and supports retention cleanup and monitor queries.
 type Store interface {
 	Insert(ctx context.Context, r Record) error
+	Clear(ctx context.Context) (int64, error)
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 	List(ctx context.Context, f ListFilter) ([]Record, int64, error)
 	Stats(ctx context.Context) (Stats, error)
@@ -41,6 +42,7 @@ type Store interface {
 type Noop struct{}
 
 func (Noop) Insert(context.Context, Record) error                      { return nil }
+func (Noop) Clear(context.Context) (int64, error)                      { return 0, nil }
 func (Noop) DeleteOlderThan(context.Context, time.Time) (int64, error) { return 0, nil }
 func (Noop) List(context.Context, ListFilter) ([]Record, int64, error) {
 	return []Record{}, 0, nil

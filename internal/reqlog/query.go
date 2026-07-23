@@ -78,6 +78,14 @@ func (l *Logger) List(ctx context.Context, f ListFilter) (ListResult, error) {
 	return out, nil
 }
 
+// Clear deletes all persisted request logs and returns the number removed.
+func (l *Logger) Clear(ctx context.Context) (int64, error) {
+	if l == nil || !l.Enabled() {
+		return 0, nil
+	}
+	return l.store.Clear(ctx)
+}
+
 // Stats returns aggregate metrics when logging is enabled.
 func (l *Logger) Stats(ctx context.Context) (Stats, error) {
 	if l == nil || !l.Enabled() {

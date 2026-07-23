@@ -296,11 +296,29 @@
       width: auto;
       margin: 0;
     }
-    .toolbar > input,
-    .toolbar > select,
-    .toolbar > button {
-      width: auto !important;
+    .toolbar > .filter-control {
+      width: 11rem !important;
+      min-width: 11rem;
+      height: 44px;
+      min-height: 44px;
+      margin: 0;
     }
+    .toolbar > input.filter-control { padding: 0 0.8rem; }
+    .toolbar > select.filter-control { padding: 0 2.5rem 0 0.8rem; }
+    .toolbar > button.btn,
+    .toolbar > label.chk {
+      height: 44px;
+      min-height: 44px;
+    }
+    .toolbar > button.btn { width: auto !important; }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin: 0 0 0.85rem;
+    }
+    .panel-head h2 { margin: 0; }
     .panel {
       border-radius: 20px;
       padding: 1rem;
@@ -364,6 +382,28 @@
       background: var(--glass-strong);
       border-color: var(--stroke-strong);
     }
+    button.btn.danger {
+      background: var(--err);
+      color: #fff;
+      border-color: transparent;
+    }
+    button.btn.danger:hover { background: var(--err); filter: brightness(0.94); }
+    button.btn.danger.ghost {
+      background: var(--err-soft);
+      color: var(--err);
+      border-color: color-mix(in srgb, var(--err) 28%, transparent);
+    }
+    button.btn.danger.ghost:hover {
+      background: color-mix(in srgb, var(--err) 18%, transparent);
+      color: var(--err);
+      border-color: color-mix(in srgb, var(--err) 42%, transparent);
+    }
+    button.btn svg {
+      width: 1rem;
+      height: 1rem;
+      margin-right: 0.35rem;
+      vertical-align: -0.15em;
+    }
     button.btn:disabled {
       opacity: 0.4;
       cursor: not-allowed;
@@ -391,24 +431,34 @@
       overflow: auto;
       border-radius: 14px;
       border: 1px solid var(--stroke);
-      background: var(--glass-soft);
+      background: var(--glass-strong);
     }
     table {
       width: 100%;
+      min-width: 860px;
       border-collapse: collapse;
+      table-layout: fixed;
       font-size: 0.8rem;
     }
+    col.time-col { width: 14%; }
+    col.status-col { width: 9%; }
+    col.tokens-col { width: 25%; }
+    col.tps-col { width: 9%; }
+    col.model-col { width: 18%; }
+    col.upstream-col { width: 15%; }
+    col.protocol-col { width: 10%; }
     th, td {
       text-align: left;
-      padding: 0.62rem 0.7rem;
+      padding: 0.72rem 0.75rem;
       border-bottom: 1px solid var(--stroke);
       vertical-align: middle;
+      background: transparent;
     }
     th {
       color: var(--muted);
       font-weight: 600;
-      font-size: 0.72rem;
-      letter-spacing: 0.04em;
+      font-size: 0.68rem;
+      letter-spacing: 0.055em;
       text-transform: uppercase;
       position: sticky;
       top: 0;
@@ -417,9 +467,66 @@
       -webkit-backdrop-filter: blur(14px);
       z-index: 1;
     }
-    tbody tr { cursor: pointer; transition: background 0.12s ease; }
+    tbody tr { cursor: pointer; transition: background 0.16s ease; }
     tbody tr:hover { background: var(--row-hover); }
     tbody tr:last-child td { border-bottom: none; }
+    .request-time {
+      display: grid;
+      gap: 0.12rem;
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .request-time .date { color: var(--muted); font-size: 0.7rem; }
+    .request-time .clock { color: var(--text-secondary); font-size: 0.78rem; }
+    .token-triplet {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      min-width: 0;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+    }
+    .token-metric {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0.22rem;
+      min-width: 0;
+    }
+    .token-metric small {
+      color: var(--muted);
+      font-family: var(--sans);
+      font-size: 0.58rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .token-metric strong { color: var(--text-secondary); font-size: 0.76rem; font-weight: 600; }
+    .token-metric.cached strong { color: var(--accent); }
+    .token-separator { color: var(--stroke-strong); }
+    .tps-value {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0.24rem;
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .tps-value small { color: var(--muted); font-family: var(--sans); font-size: 0.58rem; }
+    .protocol-tag {
+      display: inline-flex;
+      max-width: 100%;
+      padding: 0.2rem 0.5rem;
+      border-radius: 999px;
+      background: var(--track);
+      color: var(--text-secondary);
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     .pill {
       display: inline-flex;
@@ -485,6 +592,11 @@
 
     /* Frosted glass dialogs */
     dialog {
+      display: block;
+      min-width: 0;
+      min-height: 0;
+      height: fit-content;
+      margin: auto;
       border: 1px solid var(--stroke);
       border-radius: 22px;
       background: var(--dialog-bg);
@@ -555,7 +667,7 @@
     .section-title + pre + .section-title { margin-top: 0.95rem; }
 
     /* Login modal */
-    dialog#keyModal {
+    dialog#keyModal, dialog#clearModal {
       width: min(400px, 94vw);
       border-radius: 24px;
       overflow: hidden;
@@ -581,6 +693,10 @@
       margin-bottom: 1rem;
     }
     .modal-icon svg { width: 26px; height: 26px; }
+    .modal-icon.danger {
+      background: linear-gradient(145deg, #ff6961, var(--err) 60%, #c81e1e);
+      box-shadow: 0 8px 20px color-mix(in srgb, var(--err) 30%, transparent);
+    }
     .modal-title {
       margin: 0 0 0.3rem;
       font-size: 1.15rem;
@@ -606,6 +722,16 @@
       width: 100%;
     }
     .modal-actions .btn { flex: 1; padding: 0.6rem 1rem; }
+
+    @media (max-width: 720px) {
+      .panel-head { align-items: flex-start; }
+      .toolbar > .filter-control {
+        width: 100% !important;
+        min-width: 0;
+      }
+      .toolbar > button.btn { flex: 1 1 calc(50% - 0.25rem); }
+      .toolbar > label.chk { flex: 1 1 auto; justify-content: center; }
+    }
   </style>
 </head>
 <body>
@@ -645,13 +771,21 @@
     <div class="cards" id="cards"></div>
 
     <section class="panel glass" aria-labelledby="request-log-title">
-      <h2 id="request-log-title">Request log</h2>
+      <div class="panel-head">
+        <h2 id="request-log-title">Request log</h2>
+        <button type="button" class="btn danger ghost" id="btnClear" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" aria-hidden="true">
+            <path d="M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+          Clear logs
+        </button>
+      </div>
       <form class="toolbar" id="filters">
-        <select id="fModel" aria-label="model">
+        <select class="filter-control" id="fModel" aria-label="model">
           <option value="">model</option>
         </select>
-        <input id="fUpstream" aria-label="upstream" placeholder="upstream" spellcheck="false" />
-        <select id="fProtocol" aria-label="protocol">
+        <input class="filter-control" id="fUpstream" aria-label="upstream" placeholder="upstream" spellcheck="false" />
+        <select class="filter-control" id="fProtocol" aria-label="protocol">
           <option value="">protocol</option>
           <option value="chat">chat</option>
           <option value="responses">responses</option>
@@ -665,18 +799,24 @@
 
       <div class="table-wrap">
         <table>
+          <colgroup>
+            <col class="time-col" />
+            <col class="status-col" />
+            <col class="tokens-col" />
+            <col class="tps-col" />
+            <col class="model-col" />
+            <col class="upstream-col" />
+            <col class="protocol-col" />
+          </colgroup>
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Status</th>
-              <th>ms</th>
-              <th>In tok</th>
-              <th>Out tok</th>
-              <th>TPS</th>
-              <th>Model</th>
-              <th>Upstream</th>
-              <th>Protocol</th>
-              <th>Error</th>
+              <th scope="col">Time</th>
+              <th scope="col">Status</th>
+              <th scope="col">Input / Output / Cached</th>
+              <th scope="col">TPS</th>
+              <th scope="col">Model</th>
+              <th scope="col">Upstream</th>
+              <th scope="col">Protocol</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
@@ -720,10 +860,26 @@
     </form>
   </dialog>
 
+  <dialog id="clearModal">
+    <form id="clearForm" class="modal-card">
+      <div class="modal-icon danger" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+          <path d="M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+        </svg>
+      </div>
+      <h2 class="modal-title">Clear all request logs?</h2>
+      <p class="modal-sub" id="clearModalMsg" role="status" aria-live="polite">This permanently deletes every stored request log.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="clearCancel">Cancel</button>
+        <button type="submit" class="btn danger" id="clearConfirm">Clear all</button>
+      </div>
+    </form>
+  </dialog>
+
   <script>
     const THEME_KEY = 'lite-cpa-theme';
     const API_KEY = 'lite-cpa-api-key';
-    const state = { limit: 50, offset: 0, total: 0, items: [], timer: null };
+    const state = { limit: 50, offset: 0, total: 0, items: [], timer: null, clearing: false };
 
     const $ = (id) => document.getElementById(id);
 
@@ -758,6 +914,10 @@
     const keyModal = $('keyModal');
     const keyForm = $('keyForm');
     const keyInput = $('keyInput');
+    const clearModal = $('clearModal');
+    const clearForm = $('clearForm');
+    const clearModalMsg = $('clearModalMsg');
+    const clearConfirm = $('clearConfirm');
     let keyModalResolve = null;
 
     function setApiKey(message) {
@@ -784,12 +944,15 @@
       return apiKeyPrompt;
     }
 
-    async function api(path) {
+    async function api(path, init = {}) {
       const key = currentApiKey();
-      const res = await fetch(path, { headers: authHeaders(key) });
+      const res = await fetch(path, {
+        ...init,
+        headers: { ...(init.headers || {}), ...authHeaders(key) },
+      });
       if (res.status === 401) {
-        if (currentApiKey() !== key) return api(path);
-        if (await requestApiKey('Gateway API key (Bearer):')) return api(path);
+        if (currentApiKey() !== key) return api(path, init);
+        if (await requestApiKey('Gateway API key (Bearer):')) return api(path, init);
         throw new Error('unauthorized');
       }
       if (!res.ok) throw new Error(await res.text());
@@ -814,6 +977,18 @@
       const d = new Date(iso);
       if (Number.isNaN(d.getTime())) return iso;
       return d.toLocaleString();
+    }
+
+    function fmtTableTime(iso) {
+      if (!iso) return { date: '—', clock: '' };
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return { date: String(iso), clock: '' };
+      return {
+        date: d.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' }),
+        clock: d.toLocaleTimeString(undefined, {
+          hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        }),
+      };
     }
 
     function fmtTokenCount(value) {
@@ -895,17 +1070,27 @@
         $('empty').hidden = true;
         tbody.innerHTML = state.items.map((r, i) => {
           const sc = statusClass(r.status_code);
+          const time = fmtTableTime(r.timestamp);
+          const input = Number(r.input_tokens || 0);
+          const output = Number(r.output_tokens || 0);
+          const cached = Number(r.cached_tokens || 0);
+          const tokenLabel = `Input ${input.toLocaleString()}, output ${output.toLocaleString()}, cached ${cached.toLocaleString()}`;
           return `<tr data-i="${i}">
-            <td class="mono muted">${esc(fmtTime(r.timestamp))}</td>
-            <td><span class="pill ${sc}">${esc(r.status_code)}</span></td>
-            <td class="mono">${esc(r.duration_ms)}</td>
-            <td class="mono">${fmtTokenCount(r.input_tokens)}</td>
-            <td class="mono">${fmtTokenCount(r.output_tokens)}</td>
-            <td class="mono">${fmtTPS(r.output_tokens, r.duration_ms)}</td>
+            <td><time class="request-time" datetime="${esc(r.timestamp || '')}">
+              <span class="date">${esc(time.date)}</span><span class="clock">${esc(time.clock)}</span>
+            </time></td>
+            <td title="${esc(r.error || '')}"><span class="pill ${sc}">${esc(r.status_code)}</span></td>
+            <td><div class="token-triplet" aria-label="${esc(tokenLabel)}" title="${esc(tokenLabel)}">
+              <span class="token-metric"><small>in</small><strong>${esc(fmtCompactTokens(input))}</strong></span>
+              <span class="token-separator">/</span>
+              <span class="token-metric"><small>out</small><strong>${esc(fmtCompactTokens(output))}</strong></span>
+              <span class="token-separator">/</span>
+              <span class="token-metric cached"><small>cached</small><strong>${esc(fmtCompactTokens(cached))}</strong></span>
+            </div></td>
+            <td><span class="tps-value">${esc(fmtTPS(output, r.duration_ms))}<small>tok/s</small></span></td>
             <td class="mono truncate" title="${esc(r.model)}">${esc(r.model || '—')}</td>
             <td class="mono truncate" title="${esc(r.upstream)}">${esc(r.upstream || '—')}</td>
-            <td class="mono">${esc(r.protocol || '—')}</td>
-            <td class="truncate muted" title="${esc(r.error)}">${esc(r.error || '')}</td>
+            <td><span class="protocol-tag" title="${esc(r.protocol)}">${esc(r.protocol || '—')}</span></td>
           </tr>`;
         }).join('');
       }
@@ -968,6 +1153,7 @@
         $('statusLine').textContent = st.enabled
           ? `enabled · total ${st.total} · ${new Date().toLocaleTimeString()}`
           : `request-log disabled · ${new Date().toLocaleTimeString()}`;
+        $('btnClear').disabled = state.clearing || !st.enabled || Number(st.total) === 0;
         renderCards(st);
         renderModelOptions(st);
         state.items = list.items || [];
@@ -1011,6 +1197,37 @@
       if (ev.key === 'Enter') {
         ev.preventDefault();
         keyForm.requestSubmit();
+      }
+    });
+
+    $('btnClear').onclick = () => {
+      clearModalMsg.textContent = 'This permanently deletes every stored request log.';
+      clearModal.showModal();
+    };
+    $('clearCancel').onclick = () => clearModal.close();
+    clearModal.addEventListener('click', (ev) => {
+      if (ev.target === clearModal && !state.clearing) clearModal.close();
+    });
+    clearForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      state.clearing = true;
+      $('btnClear').disabled = true;
+      clearConfirm.disabled = true;
+      clearConfirm.textContent = 'Clearing…';
+      clearModalMsg.textContent = 'Deleting request logs…';
+      try {
+        const result = await api('/api/logs', { method: 'DELETE' });
+        clearModal.close();
+        state.offset = 0;
+        await refresh();
+        $('statusLine').textContent = `cleared ${result.deleted || 0} requests · ${new Date().toLocaleTimeString()}`;
+      } catch (e) {
+        clearModalMsg.textContent = 'Clear failed: ' + e.message;
+      } finally {
+        state.clearing = false;
+        clearConfirm.disabled = false;
+        clearConfirm.textContent = 'Clear all';
+        $('btnClear').disabled = state.total === 0;
       }
     });
 

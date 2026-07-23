@@ -78,6 +78,19 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+func (s *Server) handleLogsClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeAPIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
+	deleted, err := s.logger.Clear(r.Context())
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": deleted})
+}
+
 func truthy(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "on":
