@@ -12,21 +12,23 @@ import (
 )
 
 type responsesToChatState struct {
-	ID              string
-	Model           string
-	Created         int64
-	Content         strings.Builder
-	Reasoning       strings.Builder
-	ToolCalls       map[string]*toolCallAcc // call_id -> acc
-	ToolOrder       []string
-	FinishReason    string
-	PromptTokens    int64
+	ID               string
+	Model            string
+	Created          int64
+	Content          strings.Builder
+	Reasoning        strings.Builder
+	ToolCalls        map[string]*toolCallAcc // call_id and item_id -> acc
+	ToolByOutputIdx  map[int]*toolCallAcc
+	ToolOrder        []string // primary chat tool-call ids
+	FinishReason     string
+	PromptTokens     int64
 	CompletionTokens int64
-	TotalTokens     int64
+	TotalTokens      int64
 }
 
 type toolCallAcc struct {
-	ID        string
+	ID        string // chat-facing id (Responses call_id)
+	ItemID    string // Responses item.id (fc_*)
 	Name      string
 	Arguments strings.Builder
 	Index     int
@@ -40,9 +42,10 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletions(ctx context.Context, 
 	_ = requestRawJSON
 	if *param == nil {
 		*param = &responsesToChatState{
-			Model:     modelName,
-			Created:   time.Now().Unix(),
-			ToolCalls: make(map[string]*toolCallAcc),
+			Model:           modelName,
+			Created:         time.Now().Unix(),
+			ToolCalls:       make(map[string]*toolCallAcc),
+			ToolByOutputIdx: make(map[int]*toolCallAcc),
 		}
 	}
 	st := (*param).(*responsesToChatState)
@@ -127,39 +130,83 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletions(ctx context.Context, 
 	case "response.output_item.added":
 		item := root.Get("item")
 		if item.Get("type").String() == "function_call" {
+			itemID := item.Get("id").String()
 			callID := item.Get("call_id").String()
 			if callID == "" {
-				callID = item.Get("id").String()
+				callID = itemID
 			}
 			name := item.Get("name").String()
-			if _, ok := st.ToolCalls[callID]; !ok {
-				st.ToolCalls[callID] = &toolCallAcc{ID: callID, Name: name, Index: len(st.ToolOrder)}
-				st.ToolOrder = append(st.ToolOrder, callID)
-			}
-			acc := st.ToolCalls[callID]
+			acc := st.ensureToolCall(callID, itemID, name, root.Get("output_index"))
 			tc := []byte(`{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":""}}]}`)
 			tc, _ = sjson.SetBytes(tc, "tool_calls.0.index", acc.Index)
-			tc, _ = sjson.SetBytes(tc, "tool_calls.0.id", callID)
-			tc, _ = sjson.SetBytes(tc, "tool_calls.0.function.name", name)
+			tc, _ = sjson.SetBytes(tc, "tool_calls.0.id", acc.ID)
+			tc, _ = sjson.SetBytes(tc, "tool_calls.0.function.name", acc.Name)
+			// Some providers put the full JSON on the item already.
+			if args := item.Get("arguments").String(); args != "" {
+				acc.Arguments.WriteString(args)
+				tc, _ = sjson.SetBytes(tc, "tool_calls.0.function.arguments", args)
+			}
 			emitChunk(tc, "")
 		}
 	case "response.function_call_arguments.delta":
-		callID := root.Get("call_id").String()
-		if callID == "" {
-			callID = root.Get("item_id").String()
-		}
 		delta := root.Get("delta").String()
-		acc, ok := st.ToolCalls[callID]
-		if !ok {
-			acc = &toolCallAcc{ID: callID, Index: len(st.ToolOrder)}
-			st.ToolCalls[callID] = acc
-			st.ToolOrder = append(st.ToolOrder, callID)
+		if delta == "" {
+			break
+		}
+		acc := st.lookupToolCall(root.Get("call_id").String(), root.Get("item_id").String(), root.Get("output_index"))
+		if acc == nil {
+			// Last resort: keep stream alive without inventing a second tool index
+			// when we can still bind by output_index later via done.
+			acc = st.ensureToolCall(root.Get("call_id").String(), root.Get("item_id").String(), "", root.Get("output_index"))
 		}
 		acc.Arguments.WriteString(delta)
 		tc := []byte(`{"tool_calls":[{"index":0,"function":{"arguments":""}}]}`)
 		tc, _ = sjson.SetBytes(tc, "tool_calls.0.index", acc.Index)
 		tc, _ = sjson.SetBytes(tc, "tool_calls.0.function.arguments", delta)
 		emitChunk(tc, "")
+	case "response.function_call_arguments.done":
+		// Official recovery path when deltas used item_id only or were skipped.
+		args := root.Get("arguments").String()
+		acc := st.lookupToolCall(root.Get("call_id").String(), root.Get("item_id").String(), root.Get("output_index"))
+		if acc == nil {
+			acc = st.ensureToolCall(root.Get("call_id").String(), root.Get("item_id").String(), "", root.Get("output_index"))
+		}
+		if args != "" && acc.Arguments.Len() == 0 {
+			acc.Arguments.WriteString(args)
+			tc := []byte(`{"tool_calls":[{"index":0,"function":{"arguments":""}}]}`)
+			tc, _ = sjson.SetBytes(tc, "tool_calls.0.index", acc.Index)
+			tc, _ = sjson.SetBytes(tc, "tool_calls.0.function.arguments", args)
+			emitChunk(tc, "")
+		}
+	case "response.output_item.done":
+		item := root.Get("item")
+		if item.Get("type").String() != "function_call" {
+			break
+		}
+		itemID := item.Get("id").String()
+		callID := item.Get("call_id").String()
+		if callID == "" {
+			callID = itemID
+		}
+		name := item.Get("name").String()
+		args := item.Get("arguments").String()
+		acc := st.lookupToolCall(callID, itemID, root.Get("output_index"))
+		if acc == nil {
+			acc = st.ensureToolCall(callID, itemID, name, root.Get("output_index"))
+		} else if name != "" && acc.Name == "" {
+			acc.Name = name
+		}
+		if args != "" && acc.Arguments.Len() == 0 {
+			acc.Arguments.WriteString(args)
+			tc := []byte(`{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":""}}]}`)
+			tc, _ = sjson.SetBytes(tc, "tool_calls.0.index", acc.Index)
+			tc, _ = sjson.SetBytes(tc, "tool_calls.0.id", acc.ID)
+			if acc.Name != "" {
+				tc, _ = sjson.SetBytes(tc, "tool_calls.0.function.name", acc.Name)
+			}
+			tc, _ = sjson.SetBytes(tc, "tool_calls.0.function.arguments", args)
+			emitChunk(tc, "")
+		}
 	case "response.completed", "response.incomplete":
 		if usage := root.Get("response.usage"); usage.Exists() {
 			st.PromptTokens = usage.Get("input_tokens").Int()
@@ -167,7 +214,7 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletions(ctx context.Context, 
 			st.TotalTokens = usage.Get("total_tokens").Int()
 		}
 		finish := "stop"
-		if len(st.ToolCalls) > 0 {
+		if len(st.ToolOrder) > 0 {
 			finish = "tool_calls"
 		}
 		if st.FinishReason != "" {
@@ -294,4 +341,77 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// ensureToolCall registers a tool accumulator under both call_id and item_id.
+// Official Responses streams use call_id on output_item.added and item_id (item.id)
+// on function_call_arguments.delta — those must resolve to the same accumulator.
+func (st *responsesToChatState) ensureToolCall(callID, itemID, name string, outputIndex gjson.Result) *toolCallAcc {
+	if acc := st.lookupToolCall(callID, itemID, outputIndex); acc != nil {
+		if name != "" && acc.Name == "" {
+			acc.Name = name
+		}
+		if callID != "" && acc.ID == "" {
+			acc.ID = callID
+		}
+		if itemID != "" && acc.ItemID == "" {
+			acc.ItemID = itemID
+		}
+		st.indexToolCall(acc, outputIndex)
+		return acc
+	}
+
+	primary := firstNonEmpty(callID, itemID)
+	if primary == "" {
+		primary = fmt.Sprintf("call_%d", len(st.ToolOrder))
+	}
+	acc := &toolCallAcc{
+		ID:     firstNonEmpty(callID, primary),
+		ItemID: itemID,
+		Name:   name,
+		Index:  len(st.ToolOrder),
+	}
+	st.ToolOrder = append(st.ToolOrder, acc.ID)
+	st.indexToolCall(acc, outputIndex)
+	return acc
+}
+
+func (st *responsesToChatState) lookupToolCall(callID, itemID string, outputIndex gjson.Result) *toolCallAcc {
+	if st.ToolCalls == nil {
+		st.ToolCalls = make(map[string]*toolCallAcc)
+	}
+	if callID != "" {
+		if acc := st.ToolCalls[callID]; acc != nil {
+			return acc
+		}
+	}
+	if itemID != "" {
+		if acc := st.ToolCalls[itemID]; acc != nil {
+			return acc
+		}
+	}
+	if outputIndex.Exists() && st.ToolByOutputIdx != nil {
+		if acc := st.ToolByOutputIdx[int(outputIndex.Int())]; acc != nil {
+			return acc
+		}
+	}
+	return nil
+}
+
+func (st *responsesToChatState) indexToolCall(acc *toolCallAcc, outputIndex gjson.Result) {
+	if st.ToolCalls == nil {
+		st.ToolCalls = make(map[string]*toolCallAcc)
+	}
+	if st.ToolByOutputIdx == nil {
+		st.ToolByOutputIdx = make(map[int]*toolCallAcc)
+	}
+	if acc.ID != "" {
+		st.ToolCalls[acc.ID] = acc
+	}
+	if acc.ItemID != "" {
+		st.ToolCalls[acc.ItemID] = acc
+	}
+	if outputIndex.Exists() {
+		st.ToolByOutputIdx[int(outputIndex.Int())] = acc
+	}
 }
