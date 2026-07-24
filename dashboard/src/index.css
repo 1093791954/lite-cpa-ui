@@ -1,6 +1,49 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
 
+/* Control-console layout helpers. Component surfaces continue to use the
+   shared shadcn/Base UI theme tokens below. */
+.glass-sidebar {
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  border-color: var(--border);
+  backdrop-filter: blur(24px) saturate(140%);
+}
+
+.nav-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: .75rem;
+  border-radius: .75rem;
+  padding: .65rem .75rem;
+  color: var(--muted-foreground);
+  font-size: .875rem;
+  font-weight: 500;
+  transition: background-color .15s ease, color .15s ease;
+}
+
+.nav-item:hover { background: var(--muted); color: var(--foreground); }
+.nav-item-active { background: var(--primary); color: var(--primary-foreground); }
+.nav-item-active:hover { background: var(--primary); color: var(--primary-foreground); }
+
+.form-grid {
+  display: grid;
+  align-items: start;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .form-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+.glass-actionbar {
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  border-color: var(--border);
+  backdrop-filter: blur(24px) saturate(140%);
+}
+
+.yaml-editor { tab-size: 2; }
+
 @custom-variant dark (&:is(.dark *));
 
 :root {

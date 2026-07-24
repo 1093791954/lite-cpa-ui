@@ -4,7 +4,7 @@
 
 Slim Go gateway for protocol conversion among **OpenAI Chat Completions**, **OpenAI Responses**, and **Anthropic Messages**.
 
-Single binary · config multi-key pools · optional request recording (SQLite / Postgres) · no control plane.
+Single binary · config multi-key pools · optional request recording (SQLite / Postgres) · local management console.
 
 Based on [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) by Luis Pater / Router-For.ME.
 
@@ -17,6 +17,7 @@ Based on [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) by Lu
 - Optional **channel affinity** (new-api style sticky keys by header/body rule)
 - Per-provider headers (including `User-Agent`)
 - Optional request log: SQLite or Postgres with retention cleanup
+- Local Web UI for configuration, apply, rollback, status, and request logs
 - Binary / Docker / Compose deployment
 
 ## Docs
@@ -34,25 +35,39 @@ Based on [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) by Lu
 Copy-paste to your coding agent (Claude / Cursor / Codex / etc.):
 
 ```text
-Read https://github.com/Mieluoxxx/lite-cpa/blob/main/AGENTS.md and deploy lite-cpa on this machine using that document. Follow its "Configuring config.yaml" and "Deployment" sections: create config.yaml from config.example.yaml, fill gateway api-keys and at least one upstream provider, then start with docker compose (preferred) or a local binary. Prefer failover-mode key for official APIs and provider for relays. Verify with /healthz and one sample chat/completions request. Do not commit secrets.
+Read https://github.com/Mieluoxxx/lite-cpa/blob/main/AGENTS.md and deploy lite-cpa on this machine using that document. Follow its "Configuring config.yaml" and "Deployment" sections: start with docker compose (preferred) or a local binary, then use the local Web console to add an upstream provider. Prefer failover-mode key for official APIs and provider for relays. Verify with /healthz and one sample request. Do not commit secrets.
 ```
 
 
 ## Quick start
 
 ```bash
-cp config.example.yaml config.yaml
-# edit api-keys and upstream credentials
-
-go run ./cmd/lite-cpa --config config.yaml
+go run ./cmd/lite-cpa
 
 go build -trimpath -ldflags='-s -w' -o lite-cpa ./cmd/lite-cpa
-./lite-cpa --config config.yaml
+./lite-cpa
 ```
+
+If `config.yaml` does not exist, lite-cpa creates it automatically with a
+loopback gateway, gateway key `sk-lite-local`, and no upstream providers. The
+gateway and management console start immediately; add a provider before making
+model requests. Existing invalid files are never overwritten.
+
+The local management console is available at **http://127.0.0.1:8318/**.
+It has no login and displays configured secrets in plaintext, so keep the
+management listener on loopback. Use `--admin-addr off` to disable it.
+
+Configuration saves are revision-checked and atomic. The previous version is
+kept as `config.yaml.bak`; valid changes can be applied without stopping the
+management page, including gateway `host` / `port` changes.
+
+Provider cards include **Get models**. The console queries the upstream,
+detects when the Base URL needs `/v1`, and offers returned model IDs in a
+searchable multi-select. Manual model and alias entry remains available.
 
 ```bash
 curl http://127.0.0.1:8317/v1/chat/completions \
-  -H 'Authorization: Bearer sk-lite-gateway' \
+  -H 'Authorization: Bearer sk-lite-local' \
   -H 'Content-Type: application/json' \
   -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}'
 ```
@@ -231,8 +246,9 @@ Process diagnostics still go to **stderr** only (not the DB).
 ## Docker
 
 ```bash
-cp config.example.yaml config.yaml
-# edit config.yaml
+mkdir -p config
+cp config.example.yaml config/config.yaml
+# edit config/config.yaml
 
 docker compose up -d --build
 docker compose logs -f
@@ -241,10 +257,13 @@ docker compose down
 
 Mounts:
 
-- `./config.yaml` → `/app/config.yaml` (read-only)
+- `./config` → `/app/config` (read-write; required for atomic save and `.bak`)
 - `./logs` → `/app/logs` (sqlite path when enabled)
 
-Listens on port `8317`. Default timezone `Asia/Shanghai` (`TZ`).
+The gateway listens on `8317`; the console is published only on host loopback
+at `127.0.0.1:8318`. Default timezone is `Asia/Shanghai` (`TZ`).
+On native Linux Docker, make `config/` and `logs/` writable by container uid
+`10001` after creating them (for example, `sudo chown -R 10001:10001 config logs`).
 
 ### Postgres backend (optional)
 
@@ -267,8 +286,8 @@ request-log:
 
 ```bash
 docker build -t lite-cpa:local .
-docker run --rm -p 8317:8317 \
-  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+docker run --rm -p 8317:8317 -p 127.0.0.1:8318:8318 \
+  -v "$PWD/config:/app/config" \
   -v "$PWD/logs:/app/logs" \
   lite-cpa:local
 ```

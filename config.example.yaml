@@ -3,8 +3,8 @@
 # 完整字段说明见 AGENTS.md「Configuring config.yaml」
 #
 # cp config.example.yaml config.yaml
-# Enable at least one provider section below.
-# 至少启用下面一类 upstream。
+# Providers are optional at startup. Add one below or use the Web console.
+# 启动时可以没有上游；可在下方启用，也可进入 Web 管理端后添加。
 
 host: ""
 port: 8317

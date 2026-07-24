@@ -52,7 +52,6 @@ func New(cfg *config.Config, logger *reqlog.Logger) *Server {
 	mux.HandleFunc("GET /", s.handleRoot)
 	mux.HandleFunc("GET /dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /dashboard.html", s.handleDashboard)
-	mux.HandleFunc("GET /dashboard/", s.handleDashboardAsset)
 	mux.HandleFunc("GET /api/logs", s.handleLogsList)
 	mux.HandleFunc("DELETE /api/logs", s.handleLogsClear)
 	mux.HandleFunc("GET /api/logs/stats", s.handleLogsStats)
@@ -76,11 +75,25 @@ func (s *Server) ListenAndServe() error {
 	return s.http.ListenAndServe()
 }
 
+// Serve runs the gateway on an already-bound listener. Supervisors use this
+// to detect address conflicts before publishing a new runtime configuration.
+func (s *Server) Serve(listener net.Listener) error {
+	log.Printf("lite-cpa listening on %s", listener.Addr())
+	return s.http.Serve(listener)
+}
+
+// Addr returns the configured gateway listen address.
+func (s *Server) Addr() string { return s.http.Addr }
+
+// Logger returns the request logger owned by this runtime generation.
+func (s *Server) Logger() *reqlog.Logger { return s.logger }
+
 func (s *Server) Shutdown(ctx context.Context) error {
+	err := s.http.Shutdown(ctx)
 	if s.affinity != nil {
 		s.affinity.Close()
 	}
-	return s.http.Shutdown(ctx)
+	return err
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -90,7 +103,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"name":"lite-cpa","endpoints":["GET /dashboard","GET /dashboard.html","GET /api/logs","DELETE /api/logs","GET /api/logs/stats","GET /v1/models","POST /v1/chat/completions","POST /v1/responses","POST /v1/messages"]}`))
+	_, _ = w.Write([]byte(`{"name":"lite-cpa","management":"http://127.0.0.1:8318/","endpoints":["GET /api/logs","DELETE /api/logs","GET /api/logs/stats","GET /v1/models","POST /v1/chat/completions","POST /v1/responses","POST /v1/messages"]}`))
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {

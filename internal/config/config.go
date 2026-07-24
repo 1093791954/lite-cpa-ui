@@ -1,14 +1,34 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+const defaultConfigYAML = `# lite-cpa local configuration.
+# Open http://127.0.0.1:8318/ and add an upstream provider.
+host: 127.0.0.1
+port: 8317
+api-keys:
+  - sk-lite-local
+request-retry: 2
+debug: false
+channel-affinity: true
+request-log:
+  enabled: false
+  backend: sqlite
+  retention: 168h
+  store-body: false
+  sqlite:
+    path: logs/requests.db
+`
 
 // Config is the slim lite-cpa configuration surface.
 type Config struct {
@@ -233,6 +253,57 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	return Parse(data)
+}
+
+// LoadOrCreate loads path, atomically creating a safe local bootstrap config
+// when it does not exist. Existing invalid files are never overwritten.
+func LoadOrCreate(path string) (*Config, []byte, bool, error) {
+	data, err := os.ReadFile(path)
+	created := false
+	if errors.Is(err, os.ErrNotExist) {
+		if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
+			return nil, nil, false, fmt.Errorf("create config directory: %w", mkErr)
+		}
+		data = []byte(defaultConfigYAML)
+		file, createErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(createErr, os.ErrExist) {
+			data, err = os.ReadFile(path)
+		} else if createErr != nil {
+			return nil, nil, false, fmt.Errorf("create config: %w", createErr)
+		} else {
+			if _, writeErr := file.Write(data); writeErr != nil {
+				_ = file.Close()
+				_ = os.Remove(path)
+				return nil, nil, false, fmt.Errorf("write config: %w", writeErr)
+			}
+			if syncErr := file.Sync(); syncErr != nil {
+				_ = file.Close()
+				_ = os.Remove(path)
+				return nil, nil, false, fmt.Errorf("sync config: %w", syncErr)
+			}
+			if closeErr := file.Close(); closeErr != nil {
+				_ = os.Remove(path)
+				return nil, nil, false, fmt.Errorf("close config: %w", closeErr)
+			}
+			created = true
+			err = nil
+		}
+	}
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("read config: %w", err)
+	}
+	cfg, err := Parse(data)
+	if err != nil {
+		return nil, data, created, err
+	}
+	return cfg, data, created, nil
+}
+
+// Parse decodes, defaults, and validates a configuration document. It is used
+// by both process startup and the local management API so both paths accept
+// exactly the same configuration surface.
+func Parse(data []byte) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -388,9 +459,6 @@ func (c *Config) validate() error {
 		if strings.TrimSpace(k) == "" {
 			return fmt.Errorf("api-keys[%d] is empty", i)
 		}
-	}
-	if len(c.AnthropicMessages) == 0 && len(c.OpenAIResponses) == 0 && len(c.OpenAICompletions) == 0 {
-		return fmt.Errorf("at least one upstream provider is required")
 	}
 	for _, group := range [][]Provider{c.AnthropicMessages, c.OpenAIResponses, c.OpenAICompletions} {
 		for i, p := range group {

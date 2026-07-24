@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -161,6 +162,9 @@ func executeOpenAI(ctx context.Context, key registry.UpstreamKey, from, to trans
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
 	}
+	if !json.Valid(data) {
+		return nil, invalidUpstreamJSON()
+	}
 	var param any
 	out := translator.TranslateNonStream(ctx, to, from, model, original, body, data, &param)
 	return &Result{Status: resp.StatusCode, Headers: resp.Header.Clone(), Body: out}, nil
@@ -178,6 +182,12 @@ func executeOpenAIStream(ctx context.Context, key registry.UpstreamKey, from, to
 		data, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
+	}
+	if upstreamReturnedHTML(resp) {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
+		_ = data
+		return nil, invalidUpstreamJSON()
 	}
 	// Same-format: forward upstream SSE verbatim so [DONE] and framing stay intact.
 	if from == to {
@@ -202,6 +212,9 @@ func executeResponses(ctx context.Context, key registry.UpstreamKey, from, to tr
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
 	}
+	if !json.Valid(data) {
+		return nil, invalidUpstreamJSON()
+	}
 	var param any
 	out := translator.TranslateNonStream(ctx, to, from, model, original, body, data, &param)
 	return &Result{Status: resp.StatusCode, Headers: resp.Header.Clone(), Body: out}, nil
@@ -218,6 +231,11 @@ func executeResponsesStream(ctx context.Context, key registry.UpstreamKey, from,
 		data, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, StatusError{Code: resp.StatusCode, Body: string(data)}
+	}
+	if upstreamReturnedHTML(resp) {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
+		return nil, invalidUpstreamJSON()
 	}
 	// Same-format: preserve event:/data: association (do not reframe each line).
 	if from == to {
@@ -321,6 +339,17 @@ func applyCustomHeaders(req *http.Request, headers map[string]string) {
 		if k != "" && v != "" {
 			req.Header.Set(k, v)
 		}
+	}
+}
+
+func upstreamReturnedHTML(resp *http.Response) bool {
+	return strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html")
+}
+
+func invalidUpstreamJSON() StatusError {
+	return StatusError{
+		Code: http.StatusBadGateway,
+		Body: `{"error":{"message":"upstream returned a non-JSON response; check whether base-url needs /v1","type":"upstream_protocol_error"}}`,
 	}
 }
 

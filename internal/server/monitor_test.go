@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -47,8 +46,8 @@ func TestDashboardAliases(t *testing.T) {
 		if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
 			t.Fatalf("GET %s Content-Type %q", path, resp.Header.Get("Content-Type"))
 		}
-		if !strings.Contains(string(body), "lite-cpa · 请求日志") {
-			t.Fatalf("GET %s did not return dashboard HTML", path)
+		if !strings.Contains(string(body), "http://127.0.0.1:8318/") {
+			t.Fatalf("GET %s did not return management migration page", path)
 		}
 		if dashboard != "" && dashboard != string(body) {
 			t.Fatal("dashboard aliases returned different content")
@@ -56,28 +55,6 @@ func TestDashboardAliases(t *testing.T) {
 		dashboard = string(body)
 	}
 
-	assetPath := regexp.MustCompile(`href="(/dashboard/assets/[^\"]+\.css)"`).FindStringSubmatch(dashboard)
-	if len(assetPath) != 2 {
-		t.Fatalf("dashboard HTML does not reference a bundled stylesheet: %s", dashboard)
-	}
-	cssResp, err := http.Get(baseURL + assetPath[1])
-	if err != nil {
-		t.Fatalf("GET bundled CSS: %v", err)
-	}
-	cssBody, readErr := io.ReadAll(cssResp.Body)
-	cssResp.Body.Close()
-	if readErr != nil {
-		t.Fatalf("read bundled CSS: %v", readErr)
-	}
-	if cssResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET bundled CSS status %d body %s", cssResp.StatusCode, cssBody)
-	}
-	if !strings.HasPrefix(cssResp.Header.Get("Content-Type"), "text/css") {
-		t.Fatalf("GET bundled CSS Content-Type %q", cssResp.Header.Get("Content-Type"))
-	}
-	if !strings.HasPrefix(cssResp.Header.Get("Cache-Control"), "public, max-age=") {
-		t.Fatalf("GET bundled CSS Cache-Control %q", cssResp.Header.Get("Cache-Control"))
-	}
 }
 
 func TestClearLogs(t *testing.T) {

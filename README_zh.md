@@ -4,7 +4,7 @@
 
 轻量 Go 网关，在 **OpenAI Chat Completions**、**OpenAI Responses**、**Anthropic Messages** 之间做协议转换。
 
-单二进制 · 配置多 Key · 可选请求记录（SQLite / Postgres）· 无控制面。
+单二进制 · 配置多 Key · 可选请求记录（SQLite / Postgres）· 本地 Web 管理端。
 
 基于 [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI)（Luis Pater / Router-For.ME）。
 
@@ -17,6 +17,7 @@
 - 可选 **渠道亲和性**（new-api 式规则粘滞：按 header/body 钉住上游 key）
 - 按上游配置 header（含 `User-Agent`）
 - 可选请求记录：SQLite 或 Postgres，带过期清理
+- 本地 Web 管理：配置、应用、回滚、运行状态与请求日志
 - 支持二进制 / Docker / Compose 部署
 
 ## 文档
@@ -34,25 +35,30 @@
 复制下面这段给编程助手（Claude / Cursor / Codex 等）：
 
 ```text
-请阅读 https://github.com/Mieluoxxx/lite-cpa/blob/main/AGENTS.md ，并按该文档在本机部署 lite-cpa。严格遵循其中的「Configuring config.yaml」与「Deployment」：从 config.example.yaml 生成 config.yaml，填写网关 api-keys 与至少一个上游 provider，优先用 docker compose 启动（或本地二进制）。官方 API 用 failover-mode: key，中转站用 provider。
+请阅读 https://github.com/Mieluoxxx/lite-cpa/blob/main/AGENTS.md ，并按该文档在本机部署 lite-cpa。严格遵循其中的「Configuring config.yaml」与「Deployment」：优先用 docker compose 启动（或直接运行本地二进制），然后在本地 Web 管理端添加上游。官方 API 用 failover-mode: key，中转站用 provider。
 ```
 
 
 ## 快速开始
 
 ```bash
-cp config.example.yaml config.yaml
-# 填写 api-keys 与上游凭证
-
-go run ./cmd/lite-cpa --config config.yaml
+go run ./cmd/lite-cpa
 
 go build -trimpath -ldflags='-s -w' -o lite-cpa ./cmd/lite-cpa
-./lite-cpa --config config.yaml
+./lite-cpa
 ```
+
+如果当前目录没有 `config.yaml`，lite-cpa 会自动生成一份可启动的本地配置：业务网关绑定 `127.0.0.1:8317`，默认网关调用密钥为 `sk-lite-local`，上游列表为空。此时 Web 管理端可正常进入，添加上游后才能发起模型请求。已存在但内容错误的配置文件不会被覆盖。
+
+本地管理控制台默认位于 **http://127.0.0.1:8318/**。管理端不设登录，且会明文显示已配置密钥，因此必须将管理监听器限制在回环地址；可用 `--admin-addr off` 关闭。
+
+配置保存带 revision 冲突检查并采用原子替换，上一版保留为 `config.yaml.bak`。合法变更可直接应用；即使修改业务网关的 `host` / `port`，管理页面也不会随业务监听器一起停止。
+
+每个上游卡片都有「获取模型」按钮。管理端会请求上游模型列表，自动识别 Base URL 是否缺少 `/v1`，并通过可搜索的多选下拉框添加模型；也仍然可以手动填写模型和别名。
 
 ```bash
 curl http://127.0.0.1:8317/v1/chat/completions \
-  -H 'Authorization: Bearer sk-lite-gateway' \
+  -H 'Authorization: Bearer sk-lite-local' \
   -H 'Content-Type: application/json' \
   -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}'
 ```
@@ -231,8 +237,9 @@ channel-affinity: [claude, gpt, grok]
 ## Docker
 
 ```bash
-cp config.example.yaml config.yaml
-# 编辑 config.yaml
+mkdir -p config
+cp config.example.yaml config/config.yaml
+# 编辑 config/config.yaml
 
 docker compose up -d --build
 docker compose logs -f
@@ -241,10 +248,11 @@ docker compose down
 
 挂载：
 
-- `./config.yaml` → `/app/config.yaml`（只读）
+- `./config` → `/app/config`（可读写；原子保存和 `.bak` 必需）
 - `./logs` → `/app/logs`（启用 sqlite 时）
 
-监听 `8317`。默认时区 `Asia/Shanghai`（`TZ`）。
+业务网关监听 `8317`；管理端仅发布到宿主机回环地址 `127.0.0.1:8318`。默认时区 `Asia/Shanghai`（`TZ`）。
+在原生 Linux Docker 上，创建目录后需确保容器 uid `10001` 可以写入 `config/` 和 `logs/`（例如 `sudo chown -R 10001:10001 config logs`）。
 
 ### Postgres 后端（可选）
 
@@ -267,8 +275,8 @@ request-log:
 
 ```bash
 docker build -t lite-cpa:local .
-docker run --rm -p 8317:8317 \
-  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+docker run --rm -p 8317:8317 -p 127.0.0.1:8318:8318 \
+  -v "$PWD/config:/app/config" \
   -v "$PWD/logs:/app/logs" \
   lite-cpa:local
 ```

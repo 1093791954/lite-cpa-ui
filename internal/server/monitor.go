@@ -18,14 +18,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	index, err := dashboardFiles.ReadFile("dashboard/index.html")
-	if err != nil {
-		http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
-		return
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(index)
+	_, _ = w.Write([]byte(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>lite-cpa 管理端已迁移</title><body style="font:16px system-ui;max-width:640px;margin:10vh auto;padding:24px"><h1>lite-cpa 管理端</h1><p>管理界面已迁移到独立的本地监听器，默认地址：</p><p><a href="http://127.0.0.1:8318/">http://127.0.0.1:8318/</a></p></body></html>`))
 }
 
 func (s *Server) handleDashboardAsset(w http.ResponseWriter, r *http.Request) {

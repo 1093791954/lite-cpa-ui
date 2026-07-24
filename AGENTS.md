@@ -1,6 +1,6 @@
 # AGENTS.md
 
-lite-cpa is a slim Go gateway: protocol conversion among OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages; multi-key / multi-provider routing; optional channel affinity and request logging. No control plane, no OAuth account reverse-proxy.
+lite-cpa is a slim Go gateway: protocol conversion among OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages; multi-key / multi-provider routing; optional channel affinity and request logging; a local-only Web management console. No remote multi-user control plane and no OAuth account reverse-proxy.
 
 ## Scope
 
@@ -16,6 +16,8 @@ lite-cpa is a slim Go gateway: protocol conversion among OpenAI Chat Completions
 |---|---|
 | `cmd/lite-cpa/` | Entrypoint |
 | `internal/server/` | HTTP handlers, retry / failover loop |
+| `internal/server/admin.go` | Local management UI/API, config save/apply/rollback |
+| `dashboard/` | React + shadcn/Base UI management frontend |
 | `internal/pool/` | Build registry from config; key selection |
 | `internal/registry/` | Model alias → `UpstreamKey` pool (merged by alias) |
 | `internal/affinity/` | Sticky key memory + CLI session catalog (`cli_sessions.go`) |
@@ -30,8 +32,7 @@ lite-cpa is a slim Go gateway: protocol conversion among OpenAI Chat Completions
 ## Local commands
 
 ```bash
-cp config.example.yaml config.yaml   # then fill secrets
-go run ./cmd/lite-cpa --config config.yaml
+go run ./cmd/lite-cpa               # creates config.yaml when missing
 go test ./internal/...
 go build -trimpath -ldflags='-s -w' -o lite-cpa ./cmd/lite-cpa
 ```
@@ -50,7 +51,9 @@ go build -trimpath -ldflags='-s -w' -o lite-cpa ./cmd/lite-cpa
 
 ## Configuring `config.yaml`
 
-Copy `config.example.yaml` → `config.yaml`. **At least one** of `anthropic-messages`, `openai-responses`, `openai-completions` must be present with a valid key.
+When `config.yaml` is missing, lite-cpa creates a valid local starter configuration automatically. It binds the gateway to `127.0.0.1:8317`, uses gateway key `sk-lite-local`, leaves all provider lists empty, and starts the management UI at `http://127.0.0.1:8318/`. Add at least one provider before making model requests. Existing invalid configuration files are reported and never overwritten.
+
+In the Web console, each provider has **Get models** / **获取模型**. It queries the upstream model endpoint, can detect a missing `/v1` in the Base URL, and presents returned models in a searchable multi-select. Models may still be entered manually.
 
 ### Top-level fields
 
@@ -255,15 +258,15 @@ anthropic-messages:
 ## Deployment
 
 Repository: https://github.com/Mieluoxxx/lite-cpa  
-Default listen: **8317**. Config path flag: `--config` (default used by Docker: `/app/config.yaml`).
+Default gateway listen: **8317**. Local management UI: **127.0.0.1:8318**. Config path flag: `--config` (default used by Docker: `/app/config/config.yaml`).
 
 ### Prerequisites
 
-1. Copy and edit config (never commit secrets):
+1. Start the binary directly. If the configured file is missing, it is generated automatically (never commit secrets):
 
 ```bash
-cp config.example.yaml config.yaml
-# set api-keys + at least one provider (see Configuring config.yaml)
+./lite-cpa
+# then open http://127.0.0.1:8318/ and add a provider
 ```
 
 2. Health check after start:
@@ -284,8 +287,9 @@ Optional: run under systemd/supervisor; redirect stdout/stderr for process logs.
 ### Docker Compose (recommended)
 
 ```bash
-cp config.example.yaml config.yaml
-# edit config.yaml
+mkdir -p config
+cp config.example.yaml config/config.yaml
+# edit config/config.yaml
 
 docker compose up -d --build
 docker compose logs -f
@@ -294,12 +298,13 @@ docker compose down
 
 | Host path | Container | Mode |
 |---|---|---|
-| `./config.yaml` | `/app/config.yaml` | read-only |
+| `./config` | `/app/config` | rw (atomic config save + backup) |
 | `./logs` | `/app/logs` | rw (sqlite request-log) |
 
 - Image: multi-stage `golang:1.26-alpine` → `alpine:3.23`, non-root user `lite` (uid 10001).
 - Env: `TZ=Asia/Shanghai` (override as needed).
-- Restart after config edits: `docker compose restart` (config is not hot-reloaded).
+- Native Linux Docker: ensure uid 10001 can write the mounted `config/` and `logs/` directories.
+- Management UI: `http://127.0.0.1:8318/`; save-and-apply hot reloads the gateway.
 
 #### Optional Postgres for request-log
 
@@ -321,14 +326,14 @@ request-log:
 
 ```bash
 docker build -t lite-cpa:local .
-docker run --rm -p 8317:8317 \
+docker run --rm -p 8317:8317 -p 127.0.0.1:8318:8318 \
   -e TZ=Asia/Shanghai \
-  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+  -v "$PWD/config:/app/config" \
   -v "$PWD/logs:/app/logs" \
   lite-cpa:local
 ```
 
-Entrypoint: `lite-cpa --config /app/config.yaml`.
+Entrypoint defaults: `lite-cpa --config /app/config/config.yaml --admin-addr 0.0.0.0:8318`; publish the management port on host loopback only.
 
 ### Reverse proxy notes
 
@@ -338,7 +343,7 @@ Entrypoint: `lite-cpa --config /app/config.yaml`.
 
 ### Checklist
 
-- [ ] `config.yaml` has gateway `api-keys` and ≥1 upstream provider
+- [ ] `config.yaml` has gateway `api-keys`; add ≥1 upstream provider before model calls
 - [ ] Official vs relay: `failover-mode` set (`key` vs `provider`)
 - [ ] `curl /healthz` and one real model call succeed
 - [ ] Logs: process → stderr; optional request-log → sqlite/postgres path
